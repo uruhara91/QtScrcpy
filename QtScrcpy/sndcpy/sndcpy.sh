@@ -2,7 +2,7 @@
 
 # ===== KONFIGURASI =====
 # Sesuaikan nama package dan main activity kamu
-AAUDIO_APK="app-release.apk"
+AAUDIO_APK="sndcpy.apk"
 PACKAGE="com.aaudio.forwarder"
 MAIN_ACTIVITY=".MainActivity"
 
