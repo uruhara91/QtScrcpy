@@ -15,9 +15,9 @@
 #endif
 
 // Konfigurasi Package (Sesuaikan dengan AndroidManifest.xml)
-static const QString APP_PACKAGE = "com.aaudio.forwarder";
+static const QString APP_PACKAGE = "com.android.sound.helper";
 static const QString APP_ACTIVITY = ".MainActivity";
-static const QString APK_NAME = "AudioForwarder.apk"; 
+static const QString APK_NAME = "soundhelper.apk"; 
 
 // ================= WORKER IMPLEMENTATION =================
 
