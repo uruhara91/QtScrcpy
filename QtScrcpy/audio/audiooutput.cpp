@@ -46,7 +46,7 @@ void AudioServerWorker::startServer() {
         }
         m_client = next;
         
-        // OPTIMASI TCP: LOW LATENCY UNTUK FPS GAMING
+        // OPTIMASI TCP
         m_client->setSocketOption(QAbstractSocket::LowDelayOption, 1); // No Nagle
         m_client->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
         m_client->setReadBufferSize(16 * 1024); // Buffer secukupnya
@@ -235,14 +235,13 @@ void AudioOutput::setupAudioDevice() {
         format = info.nearestFormat(format);
     }
     m_audioOutput = new QAudioOutput(format, this);
-    // EXTREME LOW LATENCY: 10ms Buffer (1920 bytes)
-    m_audioOutput->setBufferSize(1920); 
+    m_audioOutput->setBufferSize(1920 * 4); 
     m_audioIO = m_audioOutput->start();
 #else
     format.setSampleFormat(QAudioFormat::Int16);
     QAudioDevice device = QMediaDevices::defaultAudioOutput();
     m_audioSink = new QAudioSink(device, format, this);
-    m_audioSink->setBufferSize(1920); 
+    m_audioSink->setBufferSize(1920 * 4); 
     m_audioIO = m_audioSink->start();
 #endif
 }
