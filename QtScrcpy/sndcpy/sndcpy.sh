@@ -1,46 +1,57 @@
 #!/bin/bash
 
-echo Begin Runing...
-SNDCPY_PORT=28200
-SNDCPY_APK=sndcpy.apk
-ADB=./adb
+# ===== KONFIGURASI =====
+# Sesuaikan nama package dan main activity kamu
+AAUDIO_APK="app-release.apk"
+PACKAGE="com.aaudio.forwarder"
+MAIN_ACTIVITY=".MainActivity"
 
-serial=
-if [[ $# -ge 2 ]]
-then
+# Default Port
+SNDCPY_PORT=28200
+
+# Deteksi ADB
+if command -v adb &> /dev/null; then
+    ADB=adb
+else
+    ADB=/usr/bin/adb
+fi
+
+# Parse arguments (serial & port dari QtScrcpy)
+serial=""
+if [[ $# -ge 2 ]]; then
     serial="-s $1"
     SNDCPY_PORT=$2
 fi
 
-echo "Waiting for device $1..."
+echo "🎵 AAudio Forwarder - Reverse Mode"
+
 $ADB $serial wait-for-device
-echo "Find device $1"
 
-sndcpy_installed=$($ADB $serial shell pm path com.rom1v.sndcpy)
-if [[ $sndcpy_installed == "" ]]; then
-    echo Install $SNDCPY_APK... 
-    $ADB $serial uninstall com.rom1v.sndcpy || echo uninstall failed
-    $ADB $serial install -t -r -g $SNDCPY_APK
-    echo Install $SNDCPY_APK success
-fi
+# 1. Install/Update APK (Skip if exist for speed, uncomment if needed)
+# $ADB $serial install -r -g "$AAUDIO_APK" 
 
-echo Request PROJECT_MEDIA permission...
-$ADB $serial shell appops set com.rom1v.sndcpy PROJECT_MEDIA allow
+# 2. CRITICAL: ADB REVERSE
+# Memetakan port HP 28200 -> PC 28200
+# PC (QtScrcpy) sudah Listening. HP (App) akan Connect.
+echo "🔄 Setting up reverse tunnel (HP:Connect -> PC:Listen)..."
+$ADB $serial reverse tcp:$SNDCPY_PORT tcp:$SNDCPY_PORT || {
+    echo "❌ Reverse tunnel failed!"
+    # Fallback: remove reverse just in case
+    $ADB $serial reverse --remove tcp:$SNDCPY_PORT
+    exit 1
+}
 
-echo Forward port $SNDCPY_PORT...
-$ADB $serial forward tcp:$SNDCPY_PORT localabstract:sndcpy
+# 3. Force stop & Grant permissions
+$ADB $serial shell am force-stop $PACKAGE 2>/dev/null
+$ADB $serial shell appops set $PACKAGE PROJECT_MEDIA allow 2>/dev/null
 
-echo Start $SNDCPY_APK...
-$ADB $serial shell am start com.rom1v.sndcpy/.MainActivity
+# 4. Start activity
+# Kita kirim Intent Extra "PORT" agar App tahu harus connect ke mana
+echo "🚀 Launching app..."
+$ADB $serial shell am start -n "$PACKAGE/$MAIN_ACTIVITY" \
+    --ei "PORT" $SNDCPY_PORT > /dev/null 2>&1
 
-while ((1))
-do
-    echo Waiting $SNDCPY_APK start...
-    sleep 0.1
-    sndcpy_started=$($ADB shell 'ps | grep com.rom1v.sndcpy')
-    if [[ $sndcpy_started != "" ]]; then
-        break
-    fi
-done
-
-echo Ready playing...
+echo "✅ App launched. Connection handled by QtScrcpy Server."
+# Script ini boleh exit, tidak perlu loop polling karena 
+# QtScrcpy yang akan handle koneksi putus/nyambung.
+exit 0

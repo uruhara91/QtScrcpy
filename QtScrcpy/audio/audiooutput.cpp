@@ -4,6 +4,7 @@
 #include <QHostAddress>
 #include <QTcpSocket>
 #include <QTime>
+#include <QThread>
 
 #if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
 #include <QAudioSink>
@@ -22,19 +23,14 @@ AudioOutput::AudioOutput(QObject *parent)
 #else
     m_audioSink = nullptr;
 #endif
-    connect(&m_sndcpy, &QProcess::readyReadStandardOutput, this, [this]() {
-        qInfo() << QString("AudioOutput::") << QString(m_sndcpy.readAllStandardOutput());
-    });
-    connect(&m_sndcpy, &QProcess::readyReadStandardError, this, [this]() {
-        qInfo() << QString("AudioOutput::") << QString(m_sndcpy.readAllStandardError());
-    });
+
+    // Pindahkan object ini ke worker thread agar UI tidak freeze saat proses audio berat
+    // Note: Logika threading di QtScrcpy asli agak unik, kita ikuti pattern mereka
+    // tapi server kita taruh di m_workerThread.
 }
 
 AudioOutput::~AudioOutput()
 {
-    if (QProcess::NotRunning != m_sndcpy.state()) {
-        m_sndcpy.kill();
-    }
     stop();
 }
 
@@ -44,16 +40,23 @@ bool AudioOutput::start(const QString& serial, int port)
         stop();
     }
 
+    // 1. Start Server DULUAN sebelum jalankan script
+    // Agar saat aplikasi Android launch, port PC sudah terbuka (listening)
+    startServer(port);
+
     QElapsedTimer timeConsumeCount;
     timeConsumeCount.start();
+
+    // 2. Jalankan Script (Launch App Android)
     bool ret = runSndcpyProcess(serial, port);
     qInfo() << "AudioOutput::run sndcpy cost:" << timeConsumeCount.elapsed() << "milliseconds";
     if (!ret) {
+        stopServer();
         return ret;
     }
 
+    // 3. Siapkan Audio Device (Speaker)
     startAudioOutput();
-    startRecvData(port);
 
     m_running = true;
     return true;
@@ -66,7 +69,12 @@ void AudioOutput::stop()
     }
     m_running = false;
 
-    stopRecvData();
+    // Matikan proses di Android/Script
+    if (QProcess::NotRunning != m_sndcpy.state()) {
+        m_sndcpy.kill();
+    }
+    
+    stopServer();
     stopAudioOutput();
 }
 
@@ -85,6 +93,7 @@ bool AudioOutput::runSndcpyProcess(const QString &serial, int port, bool wait)
     QStringList params{serial, QString::number(port)};
     m_sndcpy.start("sndcpy.bat", params);
 #else
+    // Kita asumsikan script wrapper kamu bernama sndcpy.sh
     QStringList params{"sndcpy.sh", serial, QString::number(port)};
     m_sndcpy.setWorkingDirectory(QCoreApplication::applicationDirPath());
     m_sndcpy.start("bash", params);
@@ -93,13 +102,12 @@ bool AudioOutput::runSndcpyProcess(const QString &serial, int port, bool wait)
     if (!wait) {
         return true;
     }
-
-    if (!m_sndcpy.waitForStarted()) {
+    
+    // Kita tunggu sebentar untuk memastikan script jalan, 
+    // tapi jangan terlalu lama blocking karena kita butuh event loop jalan
+    // untuk terima koneksi di thread sebelah.
+    if (!m_sndcpy.waitForStarted(2000)) {
         qWarning() << "AudioOutput::start sndcpy process failed";
-        return false;
-    }
-    if (!m_sndcpy.waitForFinished()) {
-        qWarning() << "AudioOutput::sndcpy process crashed";
         return false;
     }
 
@@ -108,54 +116,46 @@ bool AudioOutput::runSndcpyProcess(const QString &serial, int port, bool wait)
 
 void AudioOutput::startAudioOutput()
 {
-#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
-    if (m_audioOutput) {
-        return;
-    }
-
+    // FORMAT AUDIO: Sesuaikan dengan RECORD_AUDIO di Android (48000, Stereo, 16bit)
     QAudioFormat format;
     format.setSampleRate(48000);
     format.setChannelCount(2);
+    
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     format.setSampleSize(16);
     format.setCodec("audio/pcm");
     format.setByteOrder(QAudioFormat::LittleEndian);
     format.setSampleType(QAudioFormat::SignedInt);
-    QAudioDeviceInfo info(QAudioDeviceInfo::defaultOutputDevice());
 
+    QAudioDeviceInfo info(QAudioDeviceInfo::defaultOutputDevice());
     if (!info.isFormatSupported(format)) {
-        qWarning() << "AudioOutput::audio format not supported, cannot play audio.";
+        qWarning() << "AudioOutput::audio format not supported.";
         return;
     }
 
     m_audioOutput = new QAudioOutput(format, this);
-    connect(m_audioOutput, &QAudioOutput::stateChanged, this, [](QAudio::State state) {
-        qInfo() << "AudioOutput::audio state changed:" << state;
-    });
-    m_audioOutput->setBufferSize(48000*2*15/1000 * 20);
+    // OPTIMASI BUFFER: Kecilkan buffer size untuk low latency!
+    // Asumsi: 48kHz * 2 ch * 2 bytes = 192000 bytes/sec.
+    // 20ms buffer = ~3840 bytes.
+    m_audioOutput->setBufferSize(192000 * 0.050); // Set buffer ~50ms
     m_outputDevice = m_audioOutput->start();
 #else
-    if (m_audioSink) {
-        return;
-    }
-
-    QAudioFormat format;
-    format.setSampleRate(48000);
-    format.setChannelCount(2);
     format.setSampleFormat(QAudioFormat::Int16);
     QAudioDevice defaultDevice = QMediaDevices::defaultAudioOutput();
     if (!defaultDevice.isFormatSupported(format)) {
-        qWarning() << "AudioOutput::audio format not supported, cannot play audio.";
+        qWarning() << "AudioOutput::audio format not supported.";
         return;
     }
+
     m_audioSink = new QAudioSink(defaultDevice, format, this);
+    // OPTIMASI BUFFER QT6
+    m_audioSink->setBufferSize(192000 * 0.050); // Set buffer ~50ms
     m_outputDevice = m_audioSink->start();
-    if (!m_outputDevice) {
-        qWarning() << "AudioOutput::audio output device not available, cannot play audio.";
-        delete m_audioSink;
-        m_audioSink = nullptr;
-        return;
-    }
 #endif
+
+    if (!m_outputDevice) {
+        qWarning() << "AudioOutput::Failed to start audio device";
+    }
 }
 
 void AudioOutput::stopAudioOutput()
@@ -176,62 +176,78 @@ void AudioOutput::stopAudioOutput()
     m_outputDevice = nullptr;
 }
 
-void AudioOutput::startRecvData(int port)
+// === BAGIAN SERVER (YANG BARU) ===
+
+void AudioOutput::startServer(int port)
 {
     if (m_workerThread.isRunning()) {
-        stopRecvData();
+        stopServer();
     }
 
-    auto audioSocket = new QTcpSocket();
-    audioSocket->moveToThread(&m_workerThread);
-    connect(&m_workerThread, &QThread::finished, audioSocket, &QObject::deleteLater);
+    // Logic server harus jalan di worker thread biar ga nge-freeze GUI
+    // Kita manfaatkan mekanisme moveToThread yang sudah ada
+    m_server = new QTcpServer(); // Parent null dulu, akan dipindah ke thread
+    m_server->moveToThread(&m_workerThread);
 
-    connect(this, &AudioOutput::connectTo, audioSocket, [audioSocket](int port) {
-        audioSocket->connectToHost(QHostAddress::LocalHost, port);
-        if (!audioSocket->waitForConnected(500)) {
-            qWarning("AudioOutput::audio socket connect failed");
-            return;
+    connect(&m_workerThread, &QThread::started, m_server, [this, port]() {
+        if (!m_server->listen(QHostAddress::AnyIPv4, port)) {
+             qCritical() << "AudioOutput::Server failed to listen on port" << port;
+             return;
         }
-        qInfo("AudioOutput::audio socket connect success");
-    });
-    connect(audioSocket, &QIODevice::readyRead, audioSocket, [this, audioSocket]() {
-        qint64 recv = audioSocket->bytesAvailable();
-        //qDebug() << "AudioOutput::recv data:" << recv;
+        qInfo() << "AudioOutput::Server Listening on port" << port;
+    }, Qt::DirectConnection);
 
-        if (!m_outputDevice) {
-            return;
+    connect(&m_workerThread, &QThread::finished, m_server, &QObject::deleteLater);
+
+    // Handle New Connection
+    connect(m_server, &QTcpServer::newConnection, m_server, [this]() {
+        if (!m_server) return;
+        QTcpSocket *nextPending = m_server->nextPendingConnection();
+        if (!nextPending) return;
+
+        if (m_clientSocket) {
+            // Kita cuma terima 1 koneksi (HP), reject yang lain atau replace?
+            // Replace lebih aman buat reconnect scenario.
+            m_clientSocket->close();
+            m_clientSocket->deleteLater();
         }
-        if (m_buffer.capacity() < recv) {
-            m_buffer.reserve(recv);
-        }
 
-        qint64 count = audioSocket->read(m_buffer.data(), recv);
-        m_outputDevice->write(m_buffer.data(), count);
-    });
-    connect(audioSocket, &QTcpSocket::stateChanged, audioSocket, [](QAbstractSocket::SocketState state) {
-        qInfo() << "AudioOutput::audio socket state changed:" << state;
+        m_clientSocket = nextPending;
+        qInfo() << "AudioOutput::Client Connected from" << m_clientSocket->peerAddress();
 
+        // OPTIMASI SOCKET
+        m_clientSocket->setSocketOption(QAbstractSocket::LowDelayOption, 1); // TCP_NODELAY
+        m_clientSocket->setReadBufferSize(4096 * 4); // Kecilkan read buffer
+
+        connect(m_clientSocket, &QTcpSocket::readyRead, this, [this]() {
+            if (!m_clientSocket || !m_outputDevice) return;
+            
+            // BACA DARI SOCKET -> TULIS KE SPEAKER (Zero Copy logic simulation)
+            // Di Qt kita harus baca ke QByteArray dulu
+            QByteArray data = m_clientSocket->readAll();
+            if (data.isEmpty()) return;
+
+            // Langsung tulis ke audio device
+            m_outputDevice->write(data);
+        }, Qt::DirectConnection); // DirectConnection penting agar jalan di thread yang sama
+
+        connect(m_clientSocket, &QTcpSocket::disconnected, this, [this]() {
+            qInfo() << "AudioOutput::Client Disconnected";
+            if (m_clientSocket) m_clientSocket->deleteLater();
+            m_clientSocket = nullptr;
+        });
     });
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-    connect(audioSocket, &QTcpSocket::errorOccurred, audioSocket, [](QAbstractSocket::SocketError error) {
-        qInfo() << "AudioOutput::audio socket error occurred:" << error;
-    });
-#else
-    connect(audioSocket, QOverload<QAbstractSocket::SocketError>::of(&QAbstractSocket::error), audioSocket, [](QAbstractSocket::SocketError error) {
-        qInfo() << "AudioOutput::audio socket error occurred:" << error;
-    });
-#endif
 
     m_workerThread.start();
-    emit connectTo(port);
 }
 
-void AudioOutput::stopRecvData()
+void AudioOutput::stopServer()
 {
-    if (!m_workerThread.isRunning()) {
-        return;
+    if (m_workerThread.isRunning()) {
+        m_workerThread.quit();
+        m_workerThread.wait();
     }
-
-    m_workerThread.quit();
-    m_workerThread.wait();
+    // Cleanup objek yang mungkin tertinggal (dihandle deleteLater via signal finished)
+    m_clientSocket = nullptr;
+    m_server = nullptr;
 }
