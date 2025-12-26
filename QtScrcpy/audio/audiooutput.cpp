@@ -14,7 +14,6 @@
 #include <QAudioDeviceInfo>
 #endif
 
-// Konfigurasi Package (Sesuaikan dengan AndroidManifest.xml)
 static const QString APP_PACKAGE = "com.android.sound.helper";
 static const QString APP_ACTIVITY = ".MainActivity";
 static const QString APK_NAME = "soundservice.apk"; 
@@ -47,9 +46,9 @@ void AudioServerWorker::startServer() {
         m_client = next;
         
         // OPTIMASI TCP
-        m_client->setSocketOption(QAbstractSocket::LowDelayOption, 1); // No Nagle
+        m_client->setSocketOption(QAbstractSocket::LowDelayOption, 1);
         m_client->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
-        m_client->setReadBufferSize(16 * 1024); // Buffer secukupnya
+        m_client->setReadBufferSize(16 * 1024);
 
         emit clientConnected(m_client->peerAddress().toString());
 
@@ -89,7 +88,7 @@ AudioOutput::~AudioOutput() {
     stop();
 }
 
-// Helper: Menjalankan ADB command synchronous
+// Helper
 bool AudioOutput::runAdbCommand(const QString& serial, const QStringList& args) {
     QProcess adb;
     QStringList finalArgs;
@@ -110,7 +109,7 @@ bool AudioOutput::runAdbCommand(const QString& serial, const QStringList& args) 
     return (adb.exitCode() == 0);
 }
 
-// FUNCTION 1: INSTALL (Update APK & Grant Permissions)
+// FUNCTION 1: INSTALL
 bool AudioOutput::install(const QString& serial, int port) {
     Q_UNUSED(port);
     qInfo() << "AudioOutput::Starting Installation Process...";
@@ -238,7 +237,7 @@ void AudioOutput::setupAudioDevice() {
     format.setSampleFormat(QAudioFormat::Int16);
     QAudioDevice device = QMediaDevices::defaultAudioOutput();
     m_audioSink = new QAudioSink(device, format, this);
-    m_audioSink->setBufferSize(1920 * 4); 
+    m_audioSink->setBufferSize(1920 * 8); 
     m_audioIO = m_audioSink->start();
 #endif
 }
