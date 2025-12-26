@@ -45,13 +45,12 @@ public:
     explicit AudioOutput(QObject *parent = nullptr);
     ~AudioOutput();
 
-    // START: Hanya menjalankan forwarding (Instant)
     bool start(const QString& serial, int port);
-    
-    // INSTALL: Install APK + Inject Permission (One time setup)
     bool install(const QString& serial, int port);
-    
     void stop();
+
+signals:
+    void stopRequested();
 
 private:
     // Helper untuk menjalankan raw adb command

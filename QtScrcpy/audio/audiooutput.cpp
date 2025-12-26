@@ -150,34 +150,37 @@ bool AudioOutput::install(const QString& serial, int port) {
     return true;
 }
 
-// FUNCTION 2: START (Zero Overhead, Instant)
-// Ini dipanggil saat tombol "Start Audio" ditekan.
 bool AudioOutput::start(const QString& serial, int port) {
     if (m_running) stop();
     m_currentSerial = serial;
 
     qInfo() << "AudioOutput::Starting Audio Forwarding...";
 
-    // 1. ADB REVERSE (Wajib: Agar Android bisa hit localhost PC)
+    // 1. ADB REVERSE
     if (!runAdbCommand(serial, QStringList() << "reverse" << QString("tcp:%1").arg(port) << QString("tcp:%1").arg(port))) {
         qWarning() << "AudioOutput::ADB Reverse failed! Audio might not connect.";
     }
 
-    // 2. Setup PC Server (Worker Thread)
+    // 2. Setup PC Server
     m_serverWorker = new AudioServerWorker(port);
     m_serverWorker->moveToThread(&m_workerThread);
 
     connect(&m_workerThread, &QThread::finished, m_serverWorker, &QObject::deleteLater);
-    connect(this, &AudioOutput::stop, m_serverWorker, &AudioServerWorker::stopServer, Qt::QueuedConnection);
+    
+    // PERBAIKAN: Gunakan signal stopRequested
+    connect(this, &AudioOutput::stopRequested, m_serverWorker, &AudioServerWorker::stopServer, Qt::QueuedConnection);
+    
     connect(m_serverWorker, &AudioServerWorker::dataReceived, this, &AudioOutput::onDataReceived);
 
-    m_workerThread.start();
+    // Prioritas Thread (Khusus Linux/CachyOS)
+    m_workerThread.start(QThread::TimeCriticalPriority);
+    
     QMetaObject::invokeMethod(m_serverWorker, "startServer", Qt::QueuedConnection);
 
     // 3. Setup Speaker PC
     setupAudioDevice();
 
-    // 4. Launch Android App (Service Only)
+    // 4. Launch Android App
     if (!runAppProcess(serial, port)) {
         stop();
         return false;
@@ -190,13 +193,13 @@ bool AudioOutput::start(const QString& serial, int port) {
 void AudioOutput::stop() {
     m_running = false;
 
-    // Graceful Shutdown: Kirim Broadcast ke Android untuk stop service
+    // Graceful Shutdown: Kirim Broadcast (Package sudah sesuai dengan Kotlin yang baru)
     if (!m_currentSerial.isEmpty()) {
         runAdbCommand(m_currentSerial, QStringList() << "shell" << "am" << "broadcast" << "-a" << APP_PACKAGE + ".STOP");
-        
-        // Opsional: Remove reverse rule
-        // runAdbCommand(m_currentSerial, QStringList() << "reverse" << "--remove" << QString("tcp:28200"));
     }
+
+    // PERBAIKAN: Emit signal stopRequested
+    emit stopRequested(); 
 
     if (m_workerThread.isRunning()) {
         m_workerThread.quit();
