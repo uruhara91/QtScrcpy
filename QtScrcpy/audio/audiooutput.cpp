@@ -3,6 +3,7 @@
 #include <QDebug>
 #include <QAudioFormat>
 #include <QThread>
+#include <QFileInfo>
 
 #if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
 #include <QAudioSink>
@@ -12,6 +13,11 @@
 #include <QAudioOutput>
 #include <QAudioDeviceInfo>
 #endif
+
+// Konfigurasi Package (Sesuaikan dengan AndroidManifest.xml)
+static const QString APP_PACKAGE = "com.aaudio.forwarder";
+static const QString APP_ACTIVITY = ".MainActivity";
+static const QString APK_NAME = "AudioForwarder.apk"; 
 
 // ================= WORKER IMPLEMENTATION =================
 
@@ -40,16 +46,15 @@ void AudioServerWorker::startServer() {
         }
         m_client = next;
         
-        // OPTIMASI TCP: LOW LATENCY
+        // OPTIMASI TCP: LOW LATENCY UNTUK FPS GAMING
         m_client->setSocketOption(QAbstractSocket::LowDelayOption, 1); // No Nagle
         m_client->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
-        m_client->setReadBufferSize(4096 * 4); // Kecilkan buffer baca
+        m_client->setReadBufferSize(16 * 1024); // Buffer secukupnya
 
         emit clientConnected(m_client->peerAddress().toString());
 
         connect(m_client, &QTcpSocket::readyRead, this, [this]() {
             if (m_client) {
-                // Emit raw data langsung ke Main Thread untuk diproses Audio Output
                 emit dataReceived(m_client->readAll());
             }
         });
@@ -84,43 +89,95 @@ AudioOutput::~AudioOutput() {
     stop();
 }
 
+// Helper: Menjalankan ADB command synchronous
+bool AudioOutput::runAdbCommand(const QString& serial, const QStringList& args) {
+    QProcess adb;
+    QStringList finalArgs;
+    if (!serial.isEmpty()) {
+        finalArgs << "-s" << serial;
+    }
+    finalArgs << args;
+
+    adb.start("adb", finalArgs);
+    if (!adb.waitForStarted(1000)) return false;
+    
+    // Tunggu sampai selesai (Timeout 10 detik untuk install, 2 detik untuk command biasa)
+    // Install apk bisa lama, kita handle logic timeout di caller atau set cukup lama disini
+    int timeout = args.contains("install") ? 30000 : 3000;
+    if (!adb.waitForFinished(timeout)) {
+        qWarning() << "ADB Command Timed out:" << args;
+        return false;
+    }
+    
+    return (adb.exitCode() == 0);
+}
+
+// FUNCTION 1: INSTALL (Update APK & Grant Permissions)
+// Ini dipanggil saat tombol "Install Sndcpy" ditekan.
+bool AudioOutput::install(const QString& serial, int port) {
+    Q_UNUSED(port);
+    qInfo() << "AudioOutput::Starting Installation Process...";
+
+    QString apkPath = QCoreApplication::applicationDirPath() + "/" + APK_NAME;
+    if (!QFileInfo::exists(apkPath)) {
+        qCritical() << "AudioOutput::APK Not Found at:" << apkPath;
+        qCritical() << "Please place" << APK_NAME << "in the application folder.";
+        return false;
+    }
+
+    // 1. Install APK (-t: test-only, -r: replace, -g: grant runtime permissions)
+    qInfo() << "AudioOutput::Installing APK... (This may take a few seconds)";
+    if (!runAdbCommand(serial, QStringList() << "install" << "-t" << "-r" << "-g" << apkPath)) {
+        qCritical() << "AudioOutput::Install Failed!";
+        return false;
+    }
+
+    // 2. Inject Permissions (The "Silent" Magic)
+    // Ini agar user tidak perlu klik "Allow" di HP berulang kali.
+    qInfo() << "AudioOutput::Granting Special Permissions...";
+    
+    // Permission Record Audio
+    runAdbCommand(serial, QStringList() << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.RECORD_AUDIO");
+    
+    // Permission Notification (Android 13+)
+    runAdbCommand(serial, QStringList() << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.POST_NOTIFICATIONS");
+
+    // Bypass "Start Casting" Popup (AppOps)
+    // Command: cmd appops set <package> PROJECT_MEDIA allow
+    runAdbCommand(serial, QStringList() << "shell" << "appops" << "set" << APP_PACKAGE << "PROJECT_MEDIA" << "allow");
+
+    qInfo() << "AudioOutput::Installation & Setup Completed Successfully!";
+    return true;
+}
+
+// FUNCTION 2: START (Zero Overhead, Instant)
+// Ini dipanggil saat tombol "Start Audio" ditekan.
 bool AudioOutput::start(const QString& serial, int port) {
     if (m_running) stop();
     m_currentSerial = serial;
 
-    // 1. WAJIB: ADB REVERSE (Agar HP bisa connect ke localhost:port PC)
-    // Kita jalankan synchronous karena ini syarat mutlak connection.
-    qInfo() << "AudioOutput::Setting up adb reverse tcp:" << port;
-    QProcess adb;
-    QStringList adbArgs;
-    adbArgs << "-s" << serial << "reverse" << QString("tcp:%1").arg(port) << QString("tcp:%1").arg(port);
-    adb.start("adb", adbArgs);
-    adb.waitForFinished(2000); // Tunggu max 2 detik
-    if (adb.exitCode() != 0) {
-        qWarning() << "AudioOutput::ADB Reverse failed! Audio might not work.";
+    qInfo() << "AudioOutput::Starting Audio Forwarding...";
+
+    // 1. ADB REVERSE (Wajib: Agar Android bisa hit localhost PC)
+    if (!runAdbCommand(serial, QStringList() << "reverse" << QString("tcp:%1").arg(port) << QString("tcp:%1").arg(port))) {
+        qWarning() << "AudioOutput::ADB Reverse failed! Audio might not connect.";
     }
 
-    // 2. Setup Worker Thread & Server
+    // 2. Setup PC Server (Worker Thread)
     m_serverWorker = new AudioServerWorker(port);
     m_serverWorker->moveToThread(&m_workerThread);
 
     connect(&m_workerThread, &QThread::finished, m_serverWorker, &QObject::deleteLater);
     connect(this, &AudioOutput::stop, m_serverWorker, &AudioServerWorker::stopServer, Qt::QueuedConnection);
-    
-    // Connect Data Signal: Worker -> AudioOutput (Main Thread) -> Speaker
-    // Menggunakan QueuedConnection secara implisit karena beda thread.
     connect(m_serverWorker, &AudioServerWorker::dataReceived, this, &AudioOutput::onDataReceived);
 
     m_workerThread.start();
-    
-    // Trigger start server di thread worker
     QMetaObject::invokeMethod(m_serverWorker, "startServer", Qt::QueuedConnection);
 
-    // 3. Setup Audio Device (PC Speaker)
+    // 3. Setup Speaker PC
     setupAudioDevice();
 
-    // 4. Launch Android App (via Intent/Activity Manager)
-    // Asumsi: Kita pakai command 'am start' via adb shell
+    // 4. Launch Android App (Service Only)
     if (!runAppProcess(serial, port)) {
         stop();
         return false;
@@ -133,11 +190,13 @@ bool AudioOutput::start(const QString& serial, int port) {
 void AudioOutput::stop() {
     m_running = false;
 
-    // Matikan Android App (Optional, biar rapi)
-    QProcess::execute("adb", QStringList() << "-s" << m_currentSerial << "shell" << "am" << "broadcast" << "-a" << "com.aaudio.forwarder.STOP");
-    
-    // Matikan ADB Reverse
-    // QProcess::execute("adb", QStringList() << "-s" << m_currentSerial << "reverse" << "--remove" << QString("tcp:%1").arg(port));
+    // Graceful Shutdown: Kirim Broadcast ke Android untuk stop service
+    if (!m_currentSerial.isEmpty()) {
+        runAdbCommand(m_currentSerial, QStringList() << "shell" << "am" << "broadcast" << "-a" << APP_PACKAGE + ".STOP");
+        
+        // Opsional: Remove reverse rule
+        // runAdbCommand(m_currentSerial, QStringList() << "reverse" << "--remove" << QString("tcp:28200"));
+    }
 
     if (m_workerThread.isRunning()) {
         m_workerThread.quit();
@@ -148,9 +207,10 @@ void AudioOutput::stop() {
 }
 
 bool AudioOutput::runAppProcess(const QString& serial, int port) {
-    // Kita kirim Intent untuk start service/activity di Android
-    // Pastikan format komponen sesuai dengan package name di AndroidManifest
-    QString cmd = QString("am start -n com.aaudio.forwarder/.MainActivity --ei PORT %1").arg(port);
+    // Command: am start -n com.pkg/.Activity --ei PORT 28200
+    QString cmd = QString("am start -n %1/%2 --ei PORT %3")
+                      .arg(APP_PACKAGE, APP_ACTIVITY)
+                      .arg(port);
     
     QStringList params;
     params << "-s" << serial << "shell" << cmd;
@@ -172,23 +232,16 @@ void AudioOutput::setupAudioDevice() {
 
     QAudioDeviceInfo info(QAudioDeviceInfo::defaultOutputDevice());
     if (!info.isFormatSupported(format)) {
-        qWarning() << "AudioOutput::Format not supported, trying nearest.";
         format = info.nearestFormat(format);
     }
     m_audioOutput = new QAudioOutput(format, this);
-    // EXTREME LOW LATENCY: 10ms Buffer
-    // 48000 * 2 * 2 = 192,000 bytes/sec -> 10ms = 1920 bytes
+    // EXTREME LOW LATENCY: 10ms Buffer (1920 bytes)
     m_audioOutput->setBufferSize(1920); 
     m_audioIO = m_audioOutput->start();
 #else
     format.setSampleFormat(QAudioFormat::Int16);
     QAudioDevice device = QMediaDevices::defaultAudioOutput();
-    if (!device.isFormatSupported(format)) {
-        qWarning() << "AudioOutput::Format not supported";
-    }
-
     m_audioSink = new QAudioSink(device, format, this);
-    // EXTREME LOW LATENCY: 10ms Buffer
     m_audioSink->setBufferSize(1920); 
     m_audioIO = m_audioSink->start();
 #endif

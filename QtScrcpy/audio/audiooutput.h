@@ -45,10 +45,19 @@ public:
     explicit AudioOutput(QObject *parent = nullptr);
     ~AudioOutput();
 
+    // START: Hanya menjalankan forwarding (Instant)
     bool start(const QString& serial, int port);
+    
+    // INSTALL: Install APK + Inject Permission (One time setup)
+    bool install(const QString& serial, int port);
+    
     void stop();
 
 private:
+    // Helper untuk menjalankan raw adb command
+    bool runAdbCommand(const QString& serial, const QStringList& args);
+    
+    // Internal process logic
     bool runAppProcess(const QString& serial, int port);
     void setupAudioDevice();
     void cleanupAudioDevice();
@@ -59,7 +68,7 @@ private slots:
 private:
     QThread m_workerThread;
     AudioServerWorker *m_serverWorker = nullptr;
-    QProcess m_appProcess; // Process untuk launch app di Android
+    QProcess m_appProcess; 
     
     // Audio Components
     QPointer<QIODevice> m_audioIO;
