@@ -15,7 +15,7 @@ class QAudioOutput;
 #endif
 class QIODevice;
 
-// Worker class untuk menangani Server di thread terpisah
+// Worker class
 class AudioServerWorker : public QObject {
     Q_OBJECT
 public:
@@ -53,7 +53,7 @@ signals:
     void stopRequested();
 
 private:
-    // Helper untuk menjalankan raw adb command
+    // Helper
     bool runAdbCommand(const QString& serial, const QStringList& args);
     
     // Internal process logic

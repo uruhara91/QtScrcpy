@@ -101,8 +101,6 @@ bool AudioOutput::runAdbCommand(const QString& serial, const QStringList& args) 
     adb.start("adb", finalArgs);
     if (!adb.waitForStarted(1000)) return false;
     
-    // Tunggu sampai selesai (Timeout 10 detik untuk install, 2 detik untuk command biasa)
-    // Install apk bisa lama, kita handle logic timeout di caller atau set cukup lama disini
     int timeout = args.contains("install") ? 30000 : 3000;
     if (!adb.waitForFinished(timeout)) {
         qWarning() << "ADB Command Timed out:" << args;
@@ -113,7 +111,6 @@ bool AudioOutput::runAdbCommand(const QString& serial, const QStringList& args) 
 }
 
 // FUNCTION 1: INSTALL (Update APK & Grant Permissions)
-// Ini dipanggil saat tombol "Install Sndcpy" ditekan.
 bool AudioOutput::install(const QString& serial, int port) {
     Q_UNUSED(port);
     qInfo() << "AudioOutput::Starting Installation Process...";
@@ -132,8 +129,7 @@ bool AudioOutput::install(const QString& serial, int port) {
         return false;
     }
 
-    // 2. Inject Permissions (The "Silent" Magic)
-    // Ini agar user tidak perlu klik "Allow" di HP berulang kali.
+    // 2. Inject Permissions
     qInfo() << "AudioOutput::Granting Special Permissions...";
     
     // Permission Record Audio
@@ -143,7 +139,6 @@ bool AudioOutput::install(const QString& serial, int port) {
     runAdbCommand(serial, QStringList() << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.POST_NOTIFICATIONS");
 
     // Bypass "Start Casting" Popup (AppOps)
-    // Command: cmd appops set <package> PROJECT_MEDIA allow
     runAdbCommand(serial, QStringList() << "shell" << "appops" << "set" << APP_PACKAGE << "PROJECT_MEDIA" << "allow");
 
     qInfo() << "AudioOutput::Installation & Setup Completed Successfully!";
@@ -167,12 +162,11 @@ bool AudioOutput::start(const QString& serial, int port) {
 
     connect(&m_workerThread, &QThread::finished, m_serverWorker, &QObject::deleteLater);
     
-    // PERBAIKAN: Gunakan signal stopRequested
+    // Fix: use signal stopRequested
     connect(this, &AudioOutput::stopRequested, m_serverWorker, &AudioServerWorker::stopServer, Qt::QueuedConnection);
     
     connect(m_serverWorker, &AudioServerWorker::dataReceived, this, &AudioOutput::onDataReceived);
 
-    // Prioritas Thread (Khusus Linux/CachyOS)
     m_workerThread.start(QThread::TimeCriticalPriority);
     
     QMetaObject::invokeMethod(m_serverWorker, "startServer", Qt::QueuedConnection);
@@ -193,12 +187,12 @@ bool AudioOutput::start(const QString& serial, int port) {
 void AudioOutput::stop() {
     m_running = false;
 
-    // Graceful Shutdown: Kirim Broadcast (Package sudah sesuai dengan Kotlin yang baru)
+    // Graceful Shutdown
     if (!m_currentSerial.isEmpty()) {
         runAdbCommand(m_currentSerial, QStringList() << "shell" << "am" << "broadcast" << "-a" << APP_PACKAGE + ".STOP");
     }
 
-    // PERBAIKAN: Emit signal stopRequested
+    // Fix: Emit signal stopRequested
     emit stopRequested(); 
 
     if (m_workerThread.isRunning()) {
@@ -210,7 +204,7 @@ void AudioOutput::stop() {
 }
 
 bool AudioOutput::runAppProcess(const QString& serial, int port) {
-    // Command: am start -n com.pkg/.Activity --ei PORT 28200
+    
     QString cmd = QString("am start -n %1/%2 --ei PORT %3")
                       .arg(APP_PACKAGE, APP_ACTIVITY)
                       .arg(port);
