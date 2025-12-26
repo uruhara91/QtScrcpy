@@ -41,19 +41,10 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef Q_OS_LINUX
-    // Only set environment variables if they are not already set (e.g., by AppImage AppRun)
-    if (qgetenv("QTSCRCPY_ADB_PATH").isEmpty()) {
-        qputenv("QTSCRCPY_ADB_PATH", "../../../QtScrcpy/QtScrcpyCore/src/third_party/adb/linux/adb");
-    }
-    if (qgetenv("QTSCRCPY_SERVER_PATH").isEmpty()) {
-        qputenv("QTSCRCPY_SERVER_PATH", "../../../QtScrcpy/QtScrcpyCore/src/third_party/scrcpy-server");
-    }
-    if (qgetenv("QTSCRCPY_KEYMAP_PATH").isEmpty()) {
-        qputenv("QTSCRCPY_KEYMAP_PATH", "../../../keymap");
-    }
-    if (qgetenv("QTSCRCPY_CONFIG_PATH").isEmpty()) {
-        qputenv("QTSCRCPY_CONFIG_PATH", "../../../config");
-    }
+    qputenv("QTSCRCPY_ADB_PATH", "/usr/bin/adb");
+    qputenv("QTSCRCPY_SERVER_PATH", "/opt/qtscrcpy/scrcpy-server");
+    qputenv("QTSCRCPY_KEYMAP_PATH", "/opt/qtscrcpy/keymap");
+    qputenv("QTSCRCPY_CONFIG_PATH", "/opt/qtscrcpy/config");
 #endif
 
     g_msgType = covertLogLevel(Config::getInstance().getLogLevel());
