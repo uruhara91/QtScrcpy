@@ -31,6 +31,7 @@ void AudioServerWorker::startServer() {
     if (m_server && m_server->isListening()) return;
 
     m_server = new QTcpServer(this);
+    // LISTEN PORT
     if (!m_server->listen(QHostAddress::AnyIPv4, m_port)) {
         qCritical() << "AudioServerWorker::Failed to listen on port" << m_port;
         emit serverReady(false);
@@ -45,17 +46,21 @@ void AudioServerWorker::startServer() {
         }
         m_client = next;
         
-        // OPTIMASI TCP
+        // TCP
         m_client->setSocketOption(QAbstractSocket::LowDelayOption, 1);
+        // KeepAlive
         m_client->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
-        m_client->setReadBufferSize(16 * 1024);
+        
+        // Buffer read
+        m_client->setReadBufferSize(64 * 1024);
 
         emit clientConnected(m_client->peerAddress().toString());
 
         connect(m_client, &QTcpSocket::readyRead, this, [this]() {
             if (m_client) {
-                
                 m_buffer.append(m_client->readAll());
+                
+                // Align 4 bytes
                 const int align = 4; 
                 int size = m_buffer.size();
                 int writeableSize = (size / align) * align; 
@@ -128,30 +133,22 @@ bool AudioOutput::install(const QString& serial, int port) {
     QString apkPath = QCoreApplication::applicationDirPath() + "/" + APK_NAME;
     if (!QFileInfo::exists(apkPath)) {
         qCritical() << "AudioOutput::APK Not Found at:" << apkPath;
-        qCritical() << "Please place" << APK_NAME << "in the application folder.";
         return false;
     }
 
-    // 1. Install APK (-t: test-only, -r: replace, -g: grant runtime permissions)
-    qInfo() << "AudioOutput::Installing APK... (This may take a few seconds)";
+    // 1. Install
     if (!runAdbCommand(serial, QStringList() << "install" << "-t" << "-r" << "-g" << apkPath)) {
         qCritical() << "AudioOutput::Install Failed!";
         return false;
     }
 
-    // 2. Inject Permissions
-    qInfo() << "AudioOutput::Granting Special Permissions...";
+    // 2. Grant Permission
+    qInfo() << "AudioOutput::Granting Permissions...";
     
-    // Permission Record Audio
     runAdbCommand(serial, QStringList() << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.RECORD_AUDIO");
-    
-    // Permission Notification (Android 13+)
-    runAdbCommand(serial, QStringList() << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.POST_NOTIFICATIONS");
 
-    // Bypass "Start Casting" Popup (AppOps)
     runAdbCommand(serial, QStringList() << "shell" << "appops" << "set" << APP_PACKAGE << "PROJECT_MEDIA" << "allow");
 
-    qInfo() << "AudioOutput::Installation & Setup Completed Successfully!";
     return true;
 }
 
