@@ -54,7 +54,16 @@ void AudioServerWorker::startServer() {
 
         connect(m_client, &QTcpSocket::readyRead, this, [this]() {
             if (m_client) {
-                emit dataReceived(m_client->readAll());
+                
+                m_buffer.append(m_client->readAll());
+                const int align = 4; 
+                int size = m_buffer.size();
+                int writeableSize = (size / align) * align; 
+
+                if (writeableSize > 0) {
+                    emit dataReceived(m_buffer.left(writeableSize));
+                    m_buffer.remove(0, writeableSize);
+                }
             }
         });
 
@@ -239,7 +248,7 @@ void AudioOutput::setupAudioDevice() {
     format.setSampleFormat(QAudioFormat::Int16);
     QAudioDevice device = QMediaDevices::defaultAudioOutput();
     m_audioSink = new QAudioSink(device, format, this);
-    m_audioSink->setBufferSize(1920 * 8); 
+    m_audioSink->setBufferSize(1920 * 4); 
     m_audioIO = m_audioSink->start();
 #endif
 }
