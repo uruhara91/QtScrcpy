@@ -67,11 +67,13 @@ void AudioServerWorker::startServer() {
 
 void AudioServerWorker::stopServer() {
     if (m_client) {
+        m_client->disconnect();
         m_client->close();
         m_client->deleteLater();
         m_client = nullptr;
     }
     if (m_server) {
+        m_client->disconnect();
         m_server->close();
         m_server->deleteLater();
         m_server = nullptr;
