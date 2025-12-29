@@ -58,13 +58,17 @@ static const char *vertShaderHW = R"(
     }
 )";
 
+// --- SHADER HARDWARE (Fix Warna: Swizzle BGR to RGB) ---
 static const char *fragShaderHW = R"(
-    // Tidak perlu extension OES/ARB lagi karena kita pakai sampler2D
     varying vec2 textureOut;
-    uniform sampler2D tex_external; // Ganti samplerExternalOES jadi sampler2D
+    uniform sampler2D tex_external;
 
     void main(void) {
-        gl_FragColor = texture2D(tex_external, textureOut);
+        vec4 color = texture2D(tex_external, textureOut);
+        
+        // FIX: Tukar posisi Red dan Blue (bgra -> rgba)
+        // Driver Intel sering mengirim format BGR, jadi kita balik manual
+        gl_FragColor = vec4(color.b, color.g, color.r, color.a);
     }
 )";
 
