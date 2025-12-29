@@ -8,7 +8,7 @@
 
 #include "../../include/QtScrcpyCore.h"
 // Pastikan include Decoder ada agar compiler tahu return typenya
-#include "decoder/decoder.h" 
+#include "decoder/decoder.h"
 
 class QMouseEvent;
 class QWheelEvent;
@@ -87,7 +87,7 @@ private:
     // server relevant
     QPointer<Server> m_server;
     bool m_serverStartSuccess = false;
-    QPointer<Decoder> m_decoder; // Ini yang kita expose via getter di atas
+    QPointer<Decoder> m_decoder; 
     QPointer<Controller> m_controller;
     QPointer<FileHandler> m_fileHandler;
     QPointer<Demuxer> m_stream;
@@ -95,7 +95,10 @@ private:
 
     QElapsedTimer m_startTimeCount;
     DeviceParams m_params;
-    std::set<DeviceObserver*> m_observers;
+    
+    // FIX: Mengganti nama variable agar sesuai dengan device.cpp
+    std::set<DeviceObserver*> m_deviceObservers; 
+    
     void* m_userData = nullptr;
 };
 
