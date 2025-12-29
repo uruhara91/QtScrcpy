@@ -59,21 +59,9 @@ static const char *vertShaderHW = R"(
 )";
 
 static const char *fragShaderHW = R"(
-    // Coba gunakan extension ARB (Desktop) atau OES (Mobile)
-    #ifdef GL_ES
-        #extension GL_OES_EGL_image_external : require
-    #else
-        #extension GL_ARB_texture_external : enable
-        #extension GL_OES_EGL_image_external : enable
-    #endif
-
-    // Di beberapa driver desktop, samplerExternalOES perlu didefinisikan manual jika extension tidak otomatis
-    #ifndef GL_OES_EGL_image_external
-        #define samplerExternalOES sampler2D
-    #endif
-
+    // Tidak perlu extension OES/ARB lagi karena kita pakai sampler2D
     varying vec2 textureOut;
-    uniform samplerExternalOES tex_external;
+    uniform sampler2D tex_external; // Ganti samplerExternalOES jadi sampler2D
 
     void main(void) {
         gl_FragColor = texture2D(tex_external, textureOut);
@@ -176,10 +164,10 @@ void QYuvOpenGLWidget::initShader()
 
 void QYuvOpenGLWidget::initTextures()
 {
-    // Generate 4 textures: 3 for SW (YUV), 1 for HW (OES)
+    // Generate 4 textures
     glGenTextures(4, m_textures);
 
-    // Init SW Textures
+    // Init SW Textures (0, 1, 2) - Biarkan sama
     for (int i = 0; i < 3; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -188,13 +176,13 @@ void QYuvOpenGLWidget::initTextures()
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
 
-    // Init HW Texture (GL_TEXTURE_EXTERNAL_OES)
-    // Note: 0x8D65 is GL_TEXTURE_EXTERNAL_OES
-    glBindTexture(0x8D65, m_textures[3]);
-    glTexParameteri(0x8D65, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(0x8D65, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(0x8D65, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(0x8D65, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // --- UBAH BAGIAN INI ---
+    // Init HW Texture (index 3) sebagai GL_TEXTURE_2D juga!
+    glBindTexture(GL_TEXTURE_2D, m_textures[3]); 
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
 void QYuvOpenGLWidget::deInitTextures()
@@ -352,13 +340,15 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
     m_programHW.enableAttributeArray(textureLocation);
     m_programHW.setAttributeBuffer(textureLocation, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
 
+    // --- UBAH BAGIAN BINDING INI ---
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(0x8D65, m_textures[3]); // GL_TEXTURE_EXTERNAL_OES
+    glBindTexture(GL_TEXTURE_2D, m_textures[3]); // Gunakan GL_TEXTURE_2D
     
-    // Bind EGL Image ke Texture
-    m_glEGLImageTargetTexture2DOES(0x8D65, m_eglImage);
+    // Bind EGL Image ke Texture 2D
+    // Driver Intel di Linux biasanya support target GL_TEXTURE_2D
+    m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
     
-    // Cek error OpenGL setelah binding
+    // Cek error lagi untuk memastikan
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
         qWarning() << "[HW] GL Error after EGLImageTargetTexture2DOES:" << Qt::hex << err;
