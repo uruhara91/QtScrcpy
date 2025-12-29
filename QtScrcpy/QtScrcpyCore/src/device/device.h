@@ -7,6 +7,8 @@
 #include <QTime>
 
 #include "../../include/QtScrcpyCore.h"
+// Pastikan include Decoder ada agar compiler tahu return typenya
+#include "decoder/decoder.h" 
 
 class QMouseEvent;
 class QWheelEvent;
@@ -14,7 +16,6 @@ class QKeyEvent;
 class Recorder;
 class Server;
 class VideoBuffer;
-class Decoder;
 class FileHandler;
 class Demuxer;
 class VideoForm;
@@ -29,6 +30,11 @@ class Device : public IDevice
 public:
     explicit Device(DeviceParams params, QObject *parent = nullptr);
     virtual ~Device();
+
+    // --- NEW: Getter untuk Zero Copy ---
+    // Memberikan akses ke Decoder internal
+    Decoder* decoder() const { return m_decoder; }
+    // -----------------------------------
 
     void setUserData(void* data) override;
     void* getUserData() override;
@@ -81,7 +87,7 @@ private:
     // server relevant
     QPointer<Server> m_server;
     bool m_serverStartSuccess = false;
-    QPointer<Decoder> m_decoder;
+    QPointer<Decoder> m_decoder; // Ini yang kita expose via getter di atas
     QPointer<Controller> m_controller;
     QPointer<FileHandler> m_fileHandler;
     QPointer<Demuxer> m_stream;
@@ -89,7 +95,7 @@ private:
 
     QElapsedTimer m_startTimeCount;
     DeviceParams m_params;
-    std::set<DeviceObserver*> m_deviceObservers;
+    std::set<DeviceObserver*> m_observers;
     void* m_userData = nullptr;
 };
 
