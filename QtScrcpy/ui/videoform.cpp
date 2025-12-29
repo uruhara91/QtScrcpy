@@ -24,6 +24,9 @@
 #include "mousetap/mousetap.h"
 #include "ui_videoform.h"
 #include "videoform.h"
+#include "../QtScrcpyCore/src/device/device.h"
+#include "../QtScrcpyCore/src/device/decoder/decoder.h"
+#include "../QtScrcpyCore/src/device/decoder/videobuffer.h"
 
 VideoForm::VideoForm(bool framelessWindow, bool skin, bool showToolbar, QWidget *parent) : QWidget(parent), ui(new Ui::videoForm), m_skin(skin)
 {
@@ -164,6 +167,36 @@ void VideoForm::updateRender(int width, int height, uint8_t* dataY, uint8_t* dat
 void VideoForm::setSerial(const QString &serial)
 {
     m_serial = serial;
+
+    // Ambil interface device dari manager
+    auto deviceInterface = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!deviceInterface) {
+        return;
+    }
+
+    // --- MULAI LOGIKA ZERO COPY ---
+    // 1. Casting Interface (IDevice) ke Implementation (Device)
+    //    Kita butuh akses ke fungsi .decoder() yang baru kita buat di device.h
+    qsc::Device* deviceImpl = static_cast<qsc::Device*>(deviceInterface);
+
+    // 2. Cek validitas pointer
+    if (deviceImpl && deviceImpl->decoder()) {
+        // 3. Ambil VideoBuffer dari Decoder
+        VideoBuffer* vb = deviceImpl->decoder()->videoBuffer();
+        
+        if (vb) {
+            // 4. Sambungkan VideoBuffer ke Renderer (QYuvOpenGLWidget)
+            //    Ini kuncinya! Widget akan mengambil frame HW langsung dari buffer ini.
+            ui->videoWidget->setVideoBuffer(vb);
+            
+            qInfo() << "[ZeroCopy] Connected VideoBuffer to Renderer for serial:" << serial;
+        } else {
+            qWarning() << "[ZeroCopy] VideoBuffer is NULL!";
+        }
+    } else {
+        qWarning() << "[ZeroCopy] Failed to access Device internal decoder.";
+    }
+    // --- SELESAI LOGIKA ZERO COPY ---
 }
 
 void VideoForm::showToolForm(bool show)
