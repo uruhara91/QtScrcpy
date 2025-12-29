@@ -1,25 +1,43 @@
 #ifndef QYUVOPENGLWIDGET_H
 #define QYUVOPENGLWIDGET_H
-#include <QOpenGLBuffer>
-#include <QOpenGLFunctions>
-#include <QOpenGLShaderProgram>
-#include <QOpenGLWidget>
 
-class QYUVOpenGLWidget
+#include <QOpenGLWidget>
+#include <QOpenGLFunctions>
+#include <QOpenGLBuffer>
+#include <QOpenGLShaderProgram>
+#include <QMutex>
+
+// --- EGL & DRM Dependencies ---
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+// Pastikan libdrm terinstall (paket 'libdrm' di Arch/CachyOS)
+#include <libdrm/drm_fourcc.h>
+
+// Forward Declaration
+class VideoBuffer;
+struct AVFrame;
+
+class QYuvOpenGLWidget
     : public QOpenGLWidget
     , protected QOpenGLFunctions
 {
     Q_OBJECT
 public:
-    explicit QYUVOpenGLWidget(QWidget *parent = nullptr);
-    virtual ~QYUVOpenGLWidget() override;
+    explicit QYuvOpenGLWidget(QWidget *parent = nullptr);
+    virtual ~QYuvOpenGLWidget() override;
 
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
 
     void setFrameSize(const QSize &frameSize);
     const QSize &frameSize();
+
+    // Legacy method (masih disimpan untuk compatibility fallback)
     void updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV);
+
+    // --- NEW: Zero Copy Interface ---
+    // Kita set VideoBuffer agar widget bisa mengambil frame HW langsung
+    void setVideoBuffer(VideoBuffer *vb);
 
 protected:
     void initializeGL() override;
@@ -30,22 +48,43 @@ private:
     void initShader();
     void initTextures();
     void deInitTextures();
-    void updateTexture(GLuint texture, quint32 textureType, quint8 *pixels, quint32 stride);
+    
+    // Logic render Software (YUV 3 Planes)
+    void renderSoftwareFrame();
+    // Logic render Hardware (EGL DMA-BUF)
+    void renderHardwareFrame(const AVFrame *frame);
+
+    // Helper untuk membersihkan frame HW sebelumnya
+    void releaseHWFrame();
 
 private:
-    // 视频帧尺寸
     QSize m_frameSize = { -1, -1 };
-    bool m_needUpdate = false;
-    bool m_textureInited = false;
+    
+    // --- Video Source ---
+    VideoBuffer *m_vb = nullptr;
 
-    // 顶点缓冲对象(Vertex Buffer Objects, VBO)：默认即为VertexBuffer(GL_ARRAY_BUFFER)类型
+    // --- OpenGL Resources ---
     QOpenGLBuffer m_vbo;
+    
+    // Shader untuk Software Decode (YUV -> RGB conversion manual)
+    QOpenGLShaderProgram m_programSW;
+    // Shader untuk Hardware Decode (SamplerExternalOES handles conversion)
+    QOpenGLShaderProgram m_programHW;
 
-    // 着色器程序：编译链接着色器
-    QOpenGLShaderProgram m_shaderProgram;
+    // Texture IDs
+    // index 0-2: Y, U, V textures (SW)
+    // index 3: External OES texture (HW)
+    GLuint m_textures[4] = {0, 0, 0, 0};
 
-    // YUV纹理，用于生成纹理贴图
-    GLuint m_texture[3] = { 0 };
+    // --- EGL Zero-Copy Resources ---
+    EGLImageKHR m_eglImage = EGL_NO_IMAGE_KHR;
+    const AVFrame *m_currentHWFrame = nullptr; // Keep reference to prevent generic release
+
+    // --- Function Pointers untuk Ekstensi EGL ---
+    // Qt tidak selalu mengekspos ini secara langsung, jadi kita load manual
+    PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
+    PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;
+    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES = nullptr;
 };
 
 #endif // QYUVOPENGLWIDGET_H
