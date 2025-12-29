@@ -48,7 +48,7 @@ static const char *fragShaderSW = R"(
     }
 )";
 
-// --- SHADER HARDWARE (FINAL COLOR CORRECTION) ---
+// --- SHADER HARDWARE (LIMITED RANGE BT.709 FIX) ---
 static const char *vertShaderHW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -71,34 +71,37 @@ static const char *fragShaderHW = R"(
         // 1. Ambil Y (Luminance)
         y = texture2D(tex_y, textureOut).r;
 
-        // 2. Ambil UV (Chroma) dengan Presisi Tinggi
-        // Kita butuh index byte genap terdekat untuk U, ganjil untuk V.
+        // 2. Ambil UV (Chroma)
+        // Teknik "Pixel Center Sampling" untuk hindari garis hijau
         float texelSize = 1.0 / width;
-        
-        // Offset 0.5 agar sampling tepat di tengah texel (Anti-Garis Hijau)
         float pixelPos = textureOut.x * width;
         float u_x_pixel = floor(pixelPos / 2.0) * 2.0 + 0.5;
         
         float u_x = u_x_pixel * texelSize;
-        float v_x = u_x + texelSize; // Pixel sebelahnya
+        float v_x = u_x + texelSize; 
         
-        // Baca data raw
         float raw1 = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r;
         float raw2 = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r;
 
-        // --- FINAL SWAP FIX ---
-        // Jika sebelumnya Biru jadi Merah, berarti U dan V tertukar.
-        // Kembalikan ke urutan standar NV12:
-        // Byte Genap (raw1) = U
-        // Byte Ganjil (raw2) = V
+        // SWAP FIX: Byte Genap = U, Byte Ganjil = V
         u = raw1 - 0.5; 
         v = raw2 - 0.5; 
 
-        // 3. Konversi YUV ke RGB (BT.601 FULL RANGE)
-        // YUV [0, 1] -> RGB [0, 1]
-        r = y + 1.402 * v;
-        g = y - 0.344136 * u - 0.714136 * v;
-        b = y + 1.772 * u;
+        // 3. COLOR CORRECTION: BT.709 LIMITED RANGE
+        // Masalah "Butek" terjadi karena sinyal Limited (16-235) dibaca sebagai Full (0-255).
+        // Kita harus expand: (Y - 16/255) * (255/219)
+        
+        // Faktor koreksi Y (1.164 adalah scale factor untuk Limited Range)
+        y = 1.1643 * (y - 0.0627); 
+
+        // Rumus BT.709 (HDTV Standard) - Lebih akurat untuk Android modern
+        // R = Y + 1.793 * V
+        // G = Y - 0.213 * U - 0.533 * V
+        // B = Y + 2.112 * U
+        
+        r = y + 1.7927 * v;
+        g = y - 0.2132 * u - 0.5329 * v;
+        b = y + 2.1124 * u;
 
         gl_FragColor = vec4(r, g, b, 1.0);
     }
@@ -164,7 +167,6 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        // NEAREST WAJIB untuk index 3 (UV Raw)
         if (i == 3) { 
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -230,7 +232,7 @@ EGLImageKHR QYuvOpenGLWidget::createImageFromPlane(const AVDRMPlaneDescriptor &p
     attribs[i++] = EGL_HEIGHT;
     attribs[i++] = height;
     attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-    attribs[i++] = DRM_FORMAT_R8; // Force R8
+    attribs[i++] = DRM_FORMAT_R8; 
     
     attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
     attribs[i++] = obj.fd;
@@ -258,7 +260,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
         if (!desc) return;
 
-        // --- DETEKSI PLANE (Intel Gen 11+) ---
         const AVDRMPlaneDescriptor *planeY = nullptr;
         const AVDRMPlaneDescriptor *planeUV = nullptr;
 
