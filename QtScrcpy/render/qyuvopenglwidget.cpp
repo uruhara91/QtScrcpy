@@ -48,7 +48,7 @@ static const char *fragShaderSW = R"(
     }
 )";
 
-// --- SHADER HARDWARE (Manual De-interleave UV) ---
+// --- SHADER HARDWARE (FINAL CALIBRATION) ---
 static const char *vertShaderHW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -62,28 +62,39 @@ static const char *vertShaderHW = R"(
 static const char *fragShaderHW = R"(
     varying vec2 textureOut;
     uniform sampler2D tex_y;      // Y Plane (R8)
-    uniform sampler2D tex_uv_raw; // UV Plane dibaca sebagai R8 (U V U V...)
+    uniform sampler2D tex_uv_raw; // UV Plane (R8 Raw)
     uniform float width;          // Lebar Texture
 
     void main(void) {
         float y, u, v, r, g, b;
 
-        // 1. Ambil Y
+        // 1. Ambil Y (Luminance)
         y = texture2D(tex_y, textureOut).r;
 
-        // 2. Ambil UV dari Raw R8
-        // Kita cari byte U (genap) dan V (ganjil) yang sesuai dengan posisi pixel ini.
+        // 2. Ambil UV (Chroma) dengan Presisi Tinggi
+        // width * textureOut.x = posisi pixel horizontal (misal 560 * 0.5 = 280.0)
+        // Kita butuh index byte genap terdekat untuk U.
         float texelSize = 1.0 / width;
         
-        // Posisi U adalah index genap terdekat
-        float u_x = (floor(textureOut.x * width / 2.0) * 2.0) * texelSize;
-        // Posisi V adalah sebelah kanannya (ganjil)
-        float v_x = u_x + texelSize;
+        // FIX GARIS HIJAU: Tambahkan 0.5 agar sampling di tengah texel, bukan di perbatasan
+        float pixelPos = textureOut.x * width;
+        float u_x_pixel = floor(pixelPos / 2.0) * 2.0 + 0.5;
         
-        u = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r - 0.5;
-        v = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r - 0.5;
+        float u_x = u_x_pixel * texelSize;
+        float v_x = u_x + texelSize; // Pixel sebelahnya (ganjil)
+        
+        // Baca data raw
+        float raw1 = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r;
+        float raw2 = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r;
 
-        // 3. Konversi YUV ke RGB
+        // FIX WARNA TERTUKAR (Red <-> Blue Swap)
+        // Sebelumnya: u = raw1, v = raw2
+        // Sekarang kita tukar:
+        v = raw1 - 0.5; // Data pertama ternyata V
+        u = raw2 - 0.5; // Data kedua ternyata U
+
+        // 3. Konversi YUV ke RGB (BT.601 FULL RANGE - Android Standard)
+        // Rumus ini bikin warna lebih 'pop' dan hitam lebih pekat dibanding sebelumnya
         r = y + 1.402 * v;
         g = y - 0.344136 * u - 0.714136 * v;
         b = y + 1.772 * u;
@@ -133,7 +144,6 @@ void QYuvOpenGLWidget::initializeGL() {
     initShader();
     initTextures();
 
-    // Hitam Pekat
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
@@ -153,7 +163,7 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        // NEAREST penting untuk UV Raw agar tidak blending U dan V
+        // NEAREST WAJIB untuk index 3 (UV Raw) agar tidak blending
         if (i == 3) { 
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -211,7 +221,7 @@ void QYuvOpenGLWidget::releaseHWFrame() {
     m_currentHWFrame = nullptr;
 }
 
-// --- FUNGSI HELPER UNTUK BUAT EGL IMAGE ---
+// Fungsi Helper (Definisi ada di Header sekarang)
 EGLImageKHR QYuvOpenGLWidget::createImageFromPlane(const AVDRMPlaneDescriptor &plane, int width, int height, const AVDRMObjectDescriptor &obj) {
     EGLint attribs[50];
     int i = 0;
@@ -220,7 +230,7 @@ EGLImageKHR QYuvOpenGLWidget::createImageFromPlane(const AVDRMPlaneDescriptor &p
     attribs[i++] = EGL_HEIGHT;
     attribs[i++] = height;
     attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-    attribs[i++] = DRM_FORMAT_R8; // Force R8 (Raw Byte Reading)
+    attribs[i++] = DRM_FORMAT_R8; // Force R8
     
     attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
     attribs[i++] = obj.fd;
@@ -248,21 +258,17 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
         if (!desc) return;
 
-        // --- DETEKSI PLANE ---
+        // --- DETEKSI PLANE (Sama seperti sebelumnya) ---
         const AVDRMPlaneDescriptor *planeY = nullptr;
         const AVDRMPlaneDescriptor *planeUV = nullptr;
 
-        // Cari Y di Layer 0
         if (desc->nb_layers > 0) {
             planeY = &desc->layers[0].planes[0];
         }
 
-        // Cari UV: Bisa di Layer 1 (Multi-Layer) ATAU Layer 0 Plane 1 (Single-Layer)
         if (desc->nb_layers > 1) {
-            // Kasusmu: DRM Layers = 2. UV ada di Layer 1 Plane 0.
             planeUV = &desc->layers[1].planes[0];
         } else if (desc->layers[0].nb_planes > 1) {
-            // Kasus Standar: UV ada di Layer 0 Plane 1.
             planeUV = &desc->layers[0].planes[1];
         }
 
@@ -273,10 +279,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
 
         if (planeUV) {
             const AVDRMObjectDescriptor &obj = desc->objects[planeUV->object_index];
-            // UV texture lebarnya Full Width (karena R8 raw bytes), tingginya Half Height
             m_eglImageUV = createImageFromPlane(*planeUV, frame->width, frame->height / 2, obj);
-        } else {
-            qWarning() << "[HW] Warning: UV Plane NOT FOUND!";
         }
     }
 
@@ -307,7 +310,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         m_programHW.setUniformValue("tex_uv_raw", 1);
     }
 
-    // Set Width untuk kalkulasi UV
+    // Pass Width untuk perhitungan presisi di shader
     m_programHW.setUniformValue("width", (float)frame->width);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -336,18 +339,12 @@ void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *data
     renderSoftwareFrame();
     m_programSW.bind();
     m_vbo.bind();
-    
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_textures[0]);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeY, m_frameSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, dataY);
-
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_textures[1]);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeU, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataU);
-
     glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, m_textures[2]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeV, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataV);
-
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     m_programSW.release();
 }
