@@ -79,7 +79,7 @@ static const char *fragShaderHW = R"(
         // Di format NV12: Byte 0 = U, Byte 1 = V
         // Di format Texture GR88 (Little Endian): R = Byte 0, G = Byte 1
         // Jadi: R = U, G = V
-        vec2 uv = texture2D(tex_uv, textureOut).rg;
+        vec2 uv = texture2D(tex_uv, textureOut).gr;
         u = uv.r - 0.5;
         v = uv.g - 0.5;
 
