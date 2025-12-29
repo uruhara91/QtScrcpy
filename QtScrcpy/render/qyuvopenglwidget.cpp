@@ -357,6 +357,41 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
     m_programHW.release();
 }
 
+void QYuvOpenGLWidget::renderSoftwareFrame()
+{
+    // 1. Bind Shader Software (YUV -> RGB)
+    if (!m_programSW.bind()) {
+        return;
+    }
+
+    // 2. Bind VBO (Vertex Data)
+    if (!m_vbo.bind()) {
+        return;
+    }
+
+    // 3. Setup Attributes (Vertex & Texture Coords)
+    // Pastikan nama attribute sesuai dengan s_vertShaderSW ("vertexIn", "textureIn")
+    int vertexLocation = m_programSW.attributeLocation("vertexIn");
+    if (vertexLocation != -1) {
+        m_programSW.enableAttributeArray(vertexLocation);
+        m_programSW.setAttributeBuffer(vertexLocation, GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
+    }
+
+    int textureLocation = m_programSW.attributeLocation("textureIn");
+    if (textureLocation != -1) {
+        m_programSW.enableAttributeArray(textureLocation);
+        m_programSW.setAttributeBuffer(textureLocation, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
+    }
+
+    // 4. Set Uniform Samplers (texture unit 0, 1, 2)
+    m_programSW.setUniformValue("tex_y", 0);
+    m_programSW.setUniformValue("tex_u", 1);
+    m_programSW.setUniformValue("tex_v", 2);
+    
+    // Note: Kita tidak melakukan glDrawArrays di sini.
+    // Draw dilakukan di updateTextures() setelah glTexImage2D upload selesai.
+}
+
 // --- LEGACY SUPPORT ---
 void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV)
 {
