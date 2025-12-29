@@ -92,6 +92,23 @@ void VideoBuffer::offerDecodedFrame(bool &previousFrameSkipped)
     m_mutex.unlock();
 }
 
+void VideoBuffer::peekFrameInfo(int &width, int &height, int &format)
+{
+    lock();
+    if (m_renderingframe) {
+        width = m_renderingframe->width;
+        height = m_renderingframe->height;
+        format = m_renderingframe->format;
+    } else {
+        width = 0;
+        height = 0;
+        format = -1; // AV_PIX_FMT_NONE
+    }
+    // Kita hanya mengintip, jangan panggil unLock() yang men-trigger swap buffer!
+    // Cukup buka mutex manual.
+    m_mutex.unlock();
+}
+
 const AVFrame *VideoBuffer::consumeRenderedFrame()
 {
     Q_ASSERT(!m_renderingFrameConsumed);

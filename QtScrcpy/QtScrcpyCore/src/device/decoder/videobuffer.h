@@ -36,6 +36,8 @@ public:
     // unlocking m_mutex
     const AVFrame *consumeRenderedFrame();
 
+    void peekFrameInfo(int &width, int &height, int &format);
+
     void peekRenderedFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame);
 
     // wake up and avoid any blocking call

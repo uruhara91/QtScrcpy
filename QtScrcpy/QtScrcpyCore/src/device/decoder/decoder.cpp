@@ -206,29 +206,33 @@ void Decoder::pushFrame()
 
 void Decoder::onNewFrame()
 {
-    if (m_vb) {
+    if (!m_vb) return;
+
+    // 1. Intip dulu format dan ukurannya
+    int width = 0, height = 0, format = -1;
+    m_vb->peekFrameInfo(width, height, format);
+
+    if (format == AV_PIX_FMT_DRM_PRIME) {
+        // --- JALUR ZERO COPY (HARDWARE) ---
+        // JANGAN panggil consumeRenderedFrame()! Biarkan QYuvOpenGLWidget yang mengambilnya.
+        // Kita hanya perlu memberitahu UI bahwa ada frame baru dengan ukuran sekian.
+        
+        if (m_onFrame) {
+            // Kirim nullptr sebagai data agar VideoForm tahu ini mode HW
+            m_onFrame(width, height, nullptr, nullptr, nullptr, 0, 0, 0);
+        }
+    } 
+    else {
+        // --- JALUR LEGACY (SOFTWARE) ---
+        // Lakukan seperti biasa
+        m_vb->lock();
         const AVFrame *frame = m_vb->consumeRenderedFrame();
         
-        // Render Software (Legacy / Fallback)
-        // Jika formatnya DRM_PRIME, kita tidak bisa baca frame->data[0] sebagai YUV.
-        // Jadi blok ini hanya jalan kalau decoding fallback ke software.
-        if (m_onFrame && frame->format != AV_PIX_FMT_DRM_PRIME && frame->format != AV_PIX_FMT_VAAPI) {
+        if (m_onFrame && frame) {
              m_onFrame(frame->width, frame->height,
                        frame->data[0], frame->data[1], frame->data[2],
                        frame->linesize[0], frame->linesize[1], frame->linesize[2]);
         }
-        
-        // Render HW akan ditangani oleh signal 'newFrame' yang ditangkap oleh Device -> QYuvOpenGLWidget
-        // QYuvOpenGLWidget nanti akan mengambil frame langsung via videoBuffer()->peekRenderedFrame() (atau mekanisme serupa)
-        // tapi di QtScrcpy aslinya, dia pakai m_onFrame callback.
-        // TUNGGU: Callback m_onFrame didesain untuk pointer CPU (uint8_t*).
-        // Kita tidak bisa melempar data HW lewat m_onFrame ini.
-        // SOLUSI: QYuvOpenGLWidget harus kita modifikasi nanti untuk TIDAK bergantung pada signal ini 
-        // saat mode HW, tapi mengambil frame langsung.
-        
-        // Karena kita mengubah arsitektur, biarkan decoder selesai di sini.
-        // Sinyal `newFrame()` sudah di-emit di `pushFrame()`, itu yang akan memicu repaint.
-        
         m_vb->unLock();
     }
 }
