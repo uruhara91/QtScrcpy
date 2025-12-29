@@ -48,7 +48,7 @@ static const char *fragShaderSW = R"(
     }
 )";
 
-// --- SHADER HARDWARE (FINAL CALIBRATION) ---
+// --- SHADER HARDWARE (FINAL COLOR CORRECTION) ---
 static const char *vertShaderHW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -72,29 +72,30 @@ static const char *fragShaderHW = R"(
         y = texture2D(tex_y, textureOut).r;
 
         // 2. Ambil UV (Chroma) dengan Presisi Tinggi
-        // width * textureOut.x = posisi pixel horizontal (misal 560 * 0.5 = 280.0)
-        // Kita butuh index byte genap terdekat untuk U.
+        // Kita butuh index byte genap terdekat untuk U, ganjil untuk V.
         float texelSize = 1.0 / width;
         
-        // FIX GARIS HIJAU: Tambahkan 0.5 agar sampling di tengah texel, bukan di perbatasan
+        // Offset 0.5 agar sampling tepat di tengah texel (Anti-Garis Hijau)
         float pixelPos = textureOut.x * width;
         float u_x_pixel = floor(pixelPos / 2.0) * 2.0 + 0.5;
         
         float u_x = u_x_pixel * texelSize;
-        float v_x = u_x + texelSize; // Pixel sebelahnya (ganjil)
+        float v_x = u_x + texelSize; // Pixel sebelahnya
         
         // Baca data raw
         float raw1 = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r;
         float raw2 = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r;
 
-        // FIX WARNA TERTUKAR (Red <-> Blue Swap)
-        // Sebelumnya: u = raw1, v = raw2
-        // Sekarang kita tukar:
-        v = raw1 - 0.5; // Data pertama ternyata V
-        u = raw2 - 0.5; // Data kedua ternyata U
+        // --- FINAL SWAP FIX ---
+        // Jika sebelumnya Biru jadi Merah, berarti U dan V tertukar.
+        // Kembalikan ke urutan standar NV12:
+        // Byte Genap (raw1) = U
+        // Byte Ganjil (raw2) = V
+        u = raw1 - 0.5; 
+        v = raw2 - 0.5; 
 
-        // 3. Konversi YUV ke RGB (BT.601 FULL RANGE - Android Standard)
-        // Rumus ini bikin warna lebih 'pop' dan hitam lebih pekat dibanding sebelumnya
+        // 3. Konversi YUV ke RGB (BT.601 FULL RANGE)
+        // YUV [0, 1] -> RGB [0, 1]
         r = y + 1.402 * v;
         g = y - 0.344136 * u - 0.714136 * v;
         b = y + 1.772 * u;
@@ -163,7 +164,7 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        // NEAREST WAJIB untuk index 3 (UV Raw) agar tidak blending
+        // NEAREST WAJIB untuk index 3 (UV Raw)
         if (i == 3) { 
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -221,7 +222,6 @@ void QYuvOpenGLWidget::releaseHWFrame() {
     m_currentHWFrame = nullptr;
 }
 
-// Fungsi Helper (Definisi ada di Header sekarang)
 EGLImageKHR QYuvOpenGLWidget::createImageFromPlane(const AVDRMPlaneDescriptor &plane, int width, int height, const AVDRMObjectDescriptor &obj) {
     EGLint attribs[50];
     int i = 0;
@@ -258,7 +258,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
         if (!desc) return;
 
-        // --- DETEKSI PLANE (Sama seperti sebelumnya) ---
+        // --- DETEKSI PLANE (Intel Gen 11+) ---
         const AVDRMPlaneDescriptor *planeY = nullptr;
         const AVDRMPlaneDescriptor *planeUV = nullptr;
 
@@ -310,7 +310,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         m_programHW.setUniformValue("tex_uv_raw", 1);
     }
 
-    // Pass Width untuk perhitungan presisi di shader
     m_programHW.setUniformValue("width", (float)frame->width);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
