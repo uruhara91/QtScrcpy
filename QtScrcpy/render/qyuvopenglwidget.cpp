@@ -59,12 +59,23 @@ static const char *vertShaderHW = R"(
 )";
 
 static const char *fragShaderHW = R"(
-    #extension GL_OES_EGL_image_external : require
-    precision mediump float;
+    // Coba gunakan extension ARB (Desktop) atau OES (Mobile)
+    #ifdef GL_ES
+        #extension GL_OES_EGL_image_external : require
+    #else
+        #extension GL_ARB_texture_external : enable
+        #extension GL_OES_EGL_image_external : enable
+    #endif
+
+    // Di beberapa driver desktop, samplerExternalOES perlu didefinisikan manual jika extension tidak otomatis
+    #ifndef GL_OES_EGL_image_external
+        #define samplerExternalOES sampler2D
+    #endif
+
     varying vec2 textureOut;
     uniform samplerExternalOES tex_external;
+
     void main(void) {
-        // Driver GPU (Intel) otomatis convert YUV/NV12 ke RGB di sini
         gl_FragColor = texture2D(tex_external, textureOut);
     }
 )";
