@@ -19,11 +19,11 @@
 
 #include "config.h"
 #include "iconhelper.h"
-#include "qyuvopenglwidget.h"
 #include "toolform.h"
 #include "mousetap/mousetap.h"
 #include "ui_videoform.h"
 #include "videoform.h"
+#include "../render/qyuvopenglwidget.h"
 #include "../QtScrcpyCore/src/device/device.h"
 #include "../QtScrcpyCore/src/device/decoder/decoder.h"
 #include "../QtScrcpyCore/src/device/decoder/videobuffer.h"
