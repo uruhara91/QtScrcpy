@@ -5,6 +5,7 @@
 extern "C"
 {
 #include "libavcodec/avcodec.h"
+#include "libavutil/hwcontext.h" // Wajib untuk HW Decode
 }
 
 #include <functional>
@@ -24,19 +25,20 @@ public:
 
 signals:
     void updateFPS(quint32 fps);
+    void newFrame();
 
 private slots:
     void onNewFrame();
 
-signals:
-    void newFrame();
-
 private:
     void pushFrame();
+    bool initHWDecoder(const AVCodec *codec); // Fungsi inisialisasi HW
 
 private:
     VideoBuffer *m_vb = Q_NULLPTR;
     AVCodecContext *m_codecCtx = Q_NULLPTR;
+    AVBufferRef *m_hwDeviceCtx = Q_NULLPTR; // Context Hardware Device (VAAPI)
+    
     bool m_isCodecCtxOpen = false;
     std::function<void(int, int, uint8_t*, uint8_t*, uint8_t*, int, int, int)> m_onFrame = Q_NULLPTR;
 };
