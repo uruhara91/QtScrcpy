@@ -46,8 +46,7 @@ static const char *fragShaderSW = R"(
     }
 )";
 
-// --- SHADER HARDWARE (External OES) ---
-// Perhatikan extension GL_OES_EGL_image_external
+// --- SHADER HARDWARE (External OES / ARB) ---
 static const char *vertShaderHW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -58,17 +57,21 @@ static const char *vertShaderHW = R"(
     }
 )";
 
-// --- SHADER HARDWARE (Fix Warna: Swizzle BGR to RGB) ---
+// Perbaikan: Gunakan GL_ARB_texture_external untuk Desktop Linux
 static const char *fragShaderHW = R"(
+    // Deteksi apakah kita di Desktop (ARB) atau Mobile (OES)
+    #ifdef GL_ES
+        #extension GL_OES_EGL_image_external : require
+    #else
+        #extension GL_ARB_texture_external : require
+    #endif
+
     varying vec2 textureOut;
-    uniform sampler2D tex_external;
+    uniform samplerExternalOES tex_external;
 
     void main(void) {
-        vec4 color = texture2D(tex_external, textureOut);
-        
-        // FIX: Tukar posisi Red dan Blue (bgra -> rgba)
-        // Driver Intel sering mengirim format BGR, jadi kita balik manual
-        gl_FragColor = vec4(color.b, color.g, color.r, color.a);
+        // samplerExternalOES otomatis convert YUV(NV12) ke RGB!
+        gl_FragColor = texture2D(tex_external, textureOut);
     }
 )";
 
@@ -118,8 +121,7 @@ void QYuvOpenGLWidget::initializeGL()
 {
     initializeOpenGLFunctions();
 
-    // 1. Load EGL Extensions (Manual Load)
-    // Fungsi ini wajib ada untuk Zero-Copy
+    // 1. Load EGL Extensions
     m_eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
     m_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
     m_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
@@ -138,10 +140,10 @@ void QYuvOpenGLWidget::initializeGL()
     // 3. Init Shaders
     initShader();
 
-    // 4. Init Textures (Gen IDs)
+    // 4. Init Textures
     initTextures();
 
-    // Default clear color (Black)
+    // Background Hitam Pekat (Alpha 1.0)
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
@@ -168,10 +170,9 @@ void QYuvOpenGLWidget::initShader()
 
 void QYuvOpenGLWidget::initTextures()
 {
-    // Generate 4 textures
     glGenTextures(4, m_textures);
 
-    // Init SW Textures (0, 1, 2) - Biarkan sama
+    // Init SW Textures (0, 1, 2)
     for (int i = 0; i < 3; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -180,13 +181,13 @@ void QYuvOpenGLWidget::initTextures()
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
 
-    // --- UBAH BAGIAN INI ---
-    // Init HW Texture (index 3) sebagai GL_TEXTURE_2D juga!
-    glBindTexture(GL_TEXTURE_2D, m_textures[3]); 
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // --- Init HW Texture (External OES) ---
+    // Gunakan target 0x8D65 (GL_TEXTURE_EXTERNAL_OES) agar driver melakukan konversi YUV->RGB
+    glBindTexture(0x8D65, m_textures[3]); 
+    glTexParameteri(0x8D65, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(0x8D65, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(0x8D65, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(0x8D65, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
 void QYuvOpenGLWidget::deInitTextures()
@@ -208,44 +209,24 @@ void QYuvOpenGLWidget::paintGL()
 
     if (!m_vb) return;
 
-    // Ambil frame dari VideoBuffer
     m_vb->lock();
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     m_vb->unLock();
 
-    // Jika tidak ada frame baru, mungkin kita perlu repaint frame HW terakhir?
-    // Untuk simplifikasi, kita asumsikan render loop dipanggil saat ada frame baru.
-    // Tapi jika frame == null, kita bisa cek apakah kita masih punya m_currentHWFrame.
-    
+    // Repaint frame terakhir jika frame baru kosong
     if (!frame && m_currentHWFrame) {
-        // Repaint frame HW terakhir (misal saat window resize)
-        renderHardwareFrame(nullptr); // nullptr trigers repaint logic
+        renderHardwareFrame(nullptr); 
         return;
     }
 
     if (!frame) return;
 
-    // Cek tipe Frame
     if (frame->format == AV_PIX_FMT_DRM_PRIME) {
-        // --- HARDWARE PATH ---
         renderHardwareFrame(frame);
     } else {
-        // --- SOFTWARE PATH (Legacy) ---
-        // Jika karena suatu alasan decoder fallback ke SW
-        // Kita butuh data YUV manual. Di struktur baru, ini mungkin perlu penyesuaian
-        // tapi untuk sekarang kita fokus ke HW.
-        
-        // Release HW frame jika sebelumnya kita render HW
         releaseHWFrame();
-        
-        // Render SW logic (simplified call)
-        // Disini kita harusnya memanggil updateTextures dengan data dari frame->data
         updateTextures(frame->data[0], frame->data[1], frame->data[2], 
                        frame->linesize[0], frame->linesize[1], frame->linesize[2]);
-        
-        // Software frame biasanya di-copy datanya oleh updateTextures, jadi AVFrame bisa dilepas
-        // Tapi hati-hati: di VideoBuffer, pointer frame ini milik VideoBuffer.
-        // Jangan unref frame di sini kecuali kita yakin.
     }
 }
 
@@ -255,27 +236,19 @@ void QYuvOpenGLWidget::releaseHWFrame()
         m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImage);
         m_eglImage = EGL_NO_IMAGE_KHR;
     }
-    
-    // Kita tidak meng-unref frame di sini karena kepemilikan frame ada di VideoBuffer
-    // VideoBuffer akan menggunakan frame ini lagi (double buffering).
-    // Tapi kita perlu menullkan pointer render kita.
     m_currentHWFrame = nullptr;
 }
 
 void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
 {
     if (frame) {
-        // 1. Clean up old image
         releaseHWFrame();
         m_currentHWFrame = frame;
 
         const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
-        if (!desc) {
-            qWarning() << "[HW] Error: DRM Descriptor is NULL";
-            return;
-        }
+        if (!desc) return;
 
-        // 3. Create EGL Image Attribute List
+        // Create EGL Image
         EGLint attribs[50];
         int i = 0;
         attribs[i++] = EGL_WIDTH;
@@ -285,7 +258,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
         attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT;
         attribs[i++] = desc->layers[0].format;
 
-        // Plane 0
+        // Plane 0 (Y)
         attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
         attribs[i++] = desc->objects[desc->layers[0].planes[0].object_index].fd;
         attribs[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
@@ -300,7 +273,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
             attribs[i++] = desc->objects[desc->layers[0].planes[0].object_index].format_modifier >> 32;
         }
 
-        // Plane 1 (UV) - Biasanya NV12 butuh ini
+        // Plane 1 (UV)
         if (desc->layers[0].nb_planes > 1) {
             attribs[i++] = EGL_DMA_BUF_PLANE1_FD_EXT;
             attribs[i++] = desc->objects[desc->layers[0].planes[1].object_index].fd;
@@ -319,13 +292,9 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
         
         attribs[i++] = EGL_NONE;
 
-        // 4. Create EGL Image
         m_eglImage = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
-        
         if (m_eglImage == EGL_NO_IMAGE_KHR) {
-            // Log Error EGL jika gagal
-            EGLint error = eglGetError();
-            qWarning() << "[HW] Failed to create EGLImage! Error Code:" << Qt::hex << error;
+            qWarning() << "[HW] Failed to create EGLImage";
             return;
         }
     }
@@ -344,18 +313,18 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
     m_programHW.enableAttributeArray(textureLocation);
     m_programHW.setAttributeBuffer(textureLocation, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
 
-    // --- UBAH BAGIAN BINDING INI ---
+    // --- BIND KE TEXTURE EXTERNAL OES (0x8D65) ---
+    // Ini kuncinya! Jangan pakai GL_TEXTURE_2D
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_textures[3]); // Gunakan GL_TEXTURE_2D
+    glBindTexture(0x8D65, m_textures[3]); 
     
-    // Bind EGL Image ke Texture 2D
-    // Driver Intel di Linux biasanya support target GL_TEXTURE_2D
-    m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
+    // Bind EGL Image ke target EXTERNAL OES
+    m_glEGLImageTargetTexture2DOES(0x8D65, m_eglImage);
     
-    // Cek error lagi untuk memastikan
+    // Cek error untuk debugging
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
-        qWarning() << "[HW] GL Error after EGLImageTargetTexture2DOES:" << Qt::hex << err;
+        qWarning() << "[HW] GL Error:" << Qt::hex << err;
     }
     
     m_programHW.setUniformValue("tex_external", 0);
@@ -369,18 +338,9 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
 
 void QYuvOpenGLWidget::renderSoftwareFrame()
 {
-    // 1. Bind Shader Software (YUV -> RGB)
-    if (!m_programSW.bind()) {
-        return;
-    }
+    if (!m_programSW.bind()) return;
+    if (!m_vbo.bind()) return;
 
-    // 2. Bind VBO (Vertex Data)
-    if (!m_vbo.bind()) {
-        return;
-    }
-
-    // 3. Setup Attributes (Vertex & Texture Coords)
-    // Pastikan nama attribute sesuai dengan s_vertShaderSW ("vertexIn", "textureIn")
     int vertexLocation = m_programSW.attributeLocation("vertexIn");
     if (vertexLocation != -1) {
         m_programSW.enableAttributeArray(vertexLocation);
@@ -393,57 +353,34 @@ void QYuvOpenGLWidget::renderSoftwareFrame()
         m_programSW.setAttributeBuffer(textureLocation, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
     }
 
-    // 4. Set Uniform Samplers (texture unit 0, 1, 2)
     m_programSW.setUniformValue("tex_y", 0);
     m_programSW.setUniformValue("tex_u", 1);
     m_programSW.setUniformValue("tex_v", 2);
-    
-    // Note: Kita tidak melakukan glDrawArrays di sini.
-    // Draw dilakukan di updateTextures() setelah glTexImage2D upload selesai.
 }
 
-// --- LEGACY SUPPORT ---
 void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV)
 {
-    // Jika kita masuk sini, berarti mode SW.
-    renderSoftwareFrame(); // Setup shader SW
+    releaseHWFrame();
+    renderSoftwareFrame();
     
-    // ... Logic upload texture lama (glTexSubImage2D) ...
-    // Karena kode ini panjang dan kamu fokus ke HW, saya singkat bagian ini.
-    // Intinya: Logic lama yang ada di file aslimu tetap valid untuk texture[0], [1], [2].
-    // Yang penting jangan lupa bind m_programSW sebelum draw.
-    
-    // Implementasi singkat untuk kelengkapan:
     m_programSW.bind();
     m_vbo.bind();
     
-    // Setup Attributes (sama seperti HW)
-    int vertexLocation = m_programSW.attributeLocation("vertexIn");
-    m_programSW.enableAttributeArray(vertexLocation);
-    m_programSW.setAttributeBuffer(vertexLocation, GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
-    int textureLocation = m_programSW.attributeLocation("textureIn");
-    m_programSW.enableAttributeArray(textureLocation);
-    m_programSW.setAttributeBuffer(textureLocation, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
-
     // Upload Y
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeY, m_frameSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, dataY);
-    m_programSW.setUniformValue("tex_y", 0);
 
     // Upload U
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeU, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataU);
-    m_programSW.setUniformValue("tex_u", 1);
 
     // Upload V
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, m_textures[2]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeV, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataV);
-    m_programSW.setUniformValue("tex_v", 2);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    
     m_programSW.release();
 }
