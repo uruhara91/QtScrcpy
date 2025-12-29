@@ -6,6 +6,8 @@
 // --- Callback Static untuk FFmpeg ---
 static enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts)
 {
+    (void)ctx;
+    
     const enum AVPixelFormat *p;
     // Cari format VAAPI dalam daftar yang didukung codec
     for (p = pix_fmts; *p != -1; p++) {
@@ -39,7 +41,9 @@ Decoder::~Decoder() {
 }
 
 bool Decoder::initHWDecoder(const AVCodec *codec)
-{
+{   
+    (void)codec;
+    
     int ret = 0;
     // Mencoba membuat context HW Device untuk VAAPI
     // Untuk Intel Gen 11 di Linux, VAAPI adalah jalur terbaik.
