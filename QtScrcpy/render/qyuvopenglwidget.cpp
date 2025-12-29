@@ -1,7 +1,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include "qyuvopenglwidget.h"
-#include "videobuffer.h"
+#include "../../QtScrcpyCore/src/device/decoder/videobuffer.h"
 
 extern "C" {
 #include <libavutil/frame.h>
