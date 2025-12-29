@@ -10,7 +10,6 @@
 // --- EGL & DRM Dependencies ---
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-// Pastikan libdrm terinstall (paket 'libdrm' di Arch/CachyOS)
 #include <libdrm/drm_fourcc.h>
 
 // Forward Declaration
@@ -32,11 +31,10 @@ public:
     void setFrameSize(const QSize &frameSize);
     const QSize &frameSize();
 
-    // Legacy method (masih disimpan untuk compatibility fallback)
+    // Legacy method
     void updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV);
 
-    // --- NEW: Zero Copy Interface ---
-    // Kita set VideoBuffer agar widget bisa mengambil frame HW langsung
+    // Zero Copy Interface
     void setVideoBuffer(VideoBuffer *vb);
 
 protected:
@@ -49,39 +47,34 @@ private:
     void initTextures();
     void deInitTextures();
     
-    // Logic render Software (YUV 3 Planes)
+    // Logic render Software
     void renderSoftwareFrame();
-    // Logic render Hardware (EGL DMA-BUF)
+    // Logic render Hardware
     void renderHardwareFrame(const AVFrame *frame);
 
-    // Helper untuk membersihkan frame HW sebelumnya
+    // Helper cleanup
     void releaseHWFrame();
 
 private:
     QSize m_frameSize = { -1, -1 };
-    
-    // --- Video Source ---
     VideoBuffer *m_vb = nullptr;
-
-    // --- OpenGL Resources ---
     QOpenGLBuffer m_vbo;
     
-    // Shader untuk Software Decode (YUV -> RGB conversion manual)
     QOpenGLShaderProgram m_programSW;
-    // Shader untuk Hardware Decode (SamplerExternalOES handles conversion)
     QOpenGLShaderProgram m_programHW;
 
-    // Texture IDs
     // index 0-2: Y, U, V textures (SW)
-    // index 3: External OES texture (HW)
+    // HW Mode will reuse index 0 (Y) and 1 (UV)
     GLuint m_textures[4] = {0, 0, 0, 0};
 
-    // --- EGL Zero-Copy Resources ---
-    EGLImageKHR m_eglImage = EGL_NO_IMAGE_KHR;
-    const AVFrame *m_currentHWFrame = nullptr; // Keep reference to prevent generic release
+    // --- EGL Zero-Copy Resources (SPLIT PLANES) ---
+    // Kita butuh 2 image untuk NV12: Satu untuk Y, Satu untuk UV
+    EGLImageKHR m_eglImageY = EGL_NO_IMAGE_KHR;
+    EGLImageKHR m_eglImageUV = EGL_NO_IMAGE_KHR;
+    
+    const AVFrame *m_currentHWFrame = nullptr;
 
-    // --- Function Pointers untuk Ekstensi EGL ---
-    // Qt tidak selalu mengekspos ini secara langsung, jadi kita load manual
+    // --- Function Pointers ---
     PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
     PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;
     PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES = nullptr;
