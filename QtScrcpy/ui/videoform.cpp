@@ -76,7 +76,7 @@ void VideoForm::initUI()
 
     // Karena header sudah benar (../render/qyuvopenglwidget.h),
     // compiler sekarang harusnya tahu ukuran class ini.
-    m_videoWidget = new QYUVOpenGLWidget();
+    m_videoWidget = new QYuvOpenGLWidget();
     m_videoWidget->hide();
     ui->keepRatioWidget->setWidget(m_videoWidget);
     ui->keepRatioWidget->setWidthHeightRatio(m_widthHeightRatio);

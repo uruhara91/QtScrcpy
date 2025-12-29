@@ -13,7 +13,7 @@ namespace Ui
 
 class ToolForm;
 class FileHandler;
-class QYUVOpenGLWidget;
+class QYuvOpenGLWidget;
 class QLabel;
 class VideoForm : public QWidget, public qsc::DeviceObserver
 {
@@ -73,7 +73,7 @@ private:
     Ui::videoForm *ui;
     QPointer<ToolForm> m_toolForm;
     QPointer<QWidget> m_loadingWidget;
-    QPointer<QYUVOpenGLWidget> m_videoWidget;
+    QPointer<QYuvOpenGLWidget> m_videoWidget;
     QPointer<QLabel> m_fpsLabel;
 
     //inside member
