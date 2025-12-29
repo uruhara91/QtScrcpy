@@ -8,19 +8,10 @@ extern "C" {
 #include <libavutil/hwcontext_drm.h>
 }
 
-// DEFINISI FORMAT DRM
-// Kita coba RG88 (R=Byte0, G=Byte1)
 #ifndef DRM_FORMAT_R8
 #define DRM_FORMAT_R8 fourcc_code('R', '8', ' ', ' ')
 #endif
-#ifndef DRM_FORMAT_RG88
-#define DRM_FORMAT_RG88 fourcc_code('R', 'G', '8', '8')
-#endif
-#ifndef DRM_FORMAT_GR88
-#define DRM_FORMAT_GR88 fourcc_code('G', 'R', '8', '8')
-#endif
 
-// Vertices
 static const GLfloat coordinate[] = {
     -1.0f, -1.0f, 0.0f,         0.0f, 1.0f,
      1.0f, -1.0f, 0.0f,         1.0f, 1.0f,
@@ -28,6 +19,7 @@ static const GLfloat coordinate[] = {
      1.0f,  1.0f, 0.0f,         1.0f, 0.0f
 };
 
+// --- SHADER SOFTWARE ---
 static const char *vertShaderSW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -56,7 +48,7 @@ static const char *fragShaderSW = R"(
     }
 )";
 
-// --- SHADER HARDWARE (FIXED UV) ---
+// --- SHADER HARDWARE (MANUAL DE-INTERLEAVE) ---
 static const char *vertShaderHW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -69,23 +61,41 @@ static const char *vertShaderHW = R"(
 
 static const char *fragShaderHW = R"(
     varying vec2 textureOut;
-    uniform sampler2D tex_y;  // R8
-    uniform sampler2D tex_uv; // RG88
+    uniform sampler2D tex_y;      // Y Plane (R8)
+    uniform sampler2D tex_uv_raw; // UV Plane dibaca sebagai R8 (Raw Bytes: U V U V...)
+    uniform float width;          // Lebar video untuk kalkulasi pixel
 
     void main(void) {
         float y, u, v, r, g, b;
 
-        // 1. Ambil Y
+        // 1. Ambil Y (Normal)
         y = texture2D(tex_y, textureOut).r;
 
-        // 2. Ambil UV
-        // Kita gunakan format RG88.
-        // Biasanya: R = Byte 0 (U), G = Byte 1 (V)
-        // Jika wajah jadi Biru/Merah tertukar, kita tinggal tukar .r dan .g di sini.
-        vec2 uvPixel = texture2D(tex_uv, textureOut).rg;
+        // 2. Ambil UV dari Raw R8 Texture
+        // Karena kita import UV sebagai R8, texturenya berisi [U, V, U, V, ...]
+        // Lebar texture Raw ini sama dengan lebar Video (dalam bytes).
+        // Kita harus mengambil byte U (genap) dan byte V (ganjil) yang sesuai.
         
-        u = uvPixel.r - 0.5;
-        v = uvPixel.g - 0.5;
+        // Posisi horizontal saat ini (0.0 - 1.0)
+        float x = textureOut.x;
+        
+        // Karena subsampling 4:2:0, satu pasang UV berlaku untuk 2 pixel Y horizontal.
+        // Kita cari posisi 'pasangan' UV terdekat.
+        // Step 1 pixel di texture raw adalah 1.0 / width.
+        // Kita mau index genap (U) terdekat di sebelah kiri.
+        
+        float texelSize = 1.0 / width;
+        
+        // Cari koordinat U (harus pixel genap di texture Raw)
+        // floor(x * width / 2.0) * 2.0 mengembalikan index pixel 0, 2, 4...
+        float u_coord = (floor(x * width / 2.0) * 2.0) * texelSize;
+        
+        // Koordinat V adalah pixel sebelahnya (ganjil)
+        float v_coord = u_coord + texelSize;
+        
+        // Sample (Gunakan koordinat Y yang sama)
+        u = texture2D(tex_uv_raw, vec2(u_coord, textureOut.y)).r - 0.5;
+        v = texture2D(tex_uv_raw, vec2(v_coord, textureOut.y)).r - 0.5;
 
         // 3. Konversi
         r = y + 1.402 * v;
@@ -154,10 +164,18 @@ void QYuvOpenGLWidget::initShader() {
 
 void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
+    // Init semua sebagai TEXTURE_2D
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        // PENTING: Gunakan NEAREST untuk texture UV Raw agar kita bisa baca byte tepat!
+        // Kalau LINEAR, nilai U dan V akan tercampur (interpolasi) dan warna jadi aneh.
+        if (i == 3) { // Index 3 adalah UV Raw
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        } else {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        }
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
@@ -175,7 +193,6 @@ void QYuvOpenGLWidget::resizeGL(int width, int height) {
 
 void QYuvOpenGLWidget::paintGL() {
     glClear(GL_COLOR_BUFFER_BIT);
-
     if (!m_vb) return;
 
     m_vb->lock();
@@ -243,20 +260,19 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         
         m_eglImageY = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribsY);
 
-        // --- 2. Image UV (RG88) ---
-        // GANTI KE RG88 DARI GR88!
+        // --- 2. Image UV (R8 - RAW) ---
+        // TRICK: Kita baca UV Plane sebagai R8 juga!
+        // Lebar = Full Width (karena stride UV plane = Width Bytes)
+        // Tinggi = Half Height.
         if (desc->layers[0].nb_planes > 1) {
             EGLint attribsUV[50];
             i = 0;
             attribsUV[i++] = EGL_WIDTH;
-            attribsUV[i++] = frame->width / 2;
+            attribsUV[i++] = frame->width; // Full Width (Bytes)
             attribsUV[i++] = EGL_HEIGHT;
-            attribsUV[i++] = frame->height / 2;
+            attribsUV[i++] = frame->height / 2; // Half Height
             attribsUV[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-            
-            // --- CHANGE IS HERE ---
-            attribsUV[i++] = DRM_FORMAT_RG88; 
-            // ----------------------
+            attribsUV[i++] = DRM_FORMAT_R8; // Treat as Raw Byte Array
             
             attribsUV[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
             attribsUV[i++] = desc->objects[desc->layers[0].planes[1].object_index].fd;
@@ -274,14 +290,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
             attribsUV[i++] = EGL_NONE;
 
             m_eglImageUV = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribsUV);
-            
-            // Debug Log untuk UV
-            if (m_eglImageUV == EGL_NO_IMAGE_KHR) {
-                EGLint err = eglGetError();
-                qWarning() << "[HW] Failed to create UV Image (RG88)! Err:" << Qt::hex << err;
-                // Jika gagal, set pointer ke NULL agar render jalan terus (sebagai grayscale hijau)
-                m_eglImageUV = EGL_NO_IMAGE_KHR;
-            }
         }
     }
 
@@ -298,24 +306,26 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     m_programHW.enableAttributeArray(textureLoc);
     m_programHW.setAttributeBuffer(textureLoc, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
 
-    // Bind Y
+    // Bind Y to Unit 0
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageY);
     m_programHW.setUniformValue("tex_y", 0);
 
-    // Bind UV (Jika ada)
+    // Bind UV Raw to Unit 1
     if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, m_textures[1]);
+        glBindTexture(GL_TEXTURE_2D, m_textures[1]); // Asumsi index 1 dipakai UV
+        // Set Nearest Filtering untuk UV Raw (Wajib agar math presisi)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        
         m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageUV);
-        m_programHW.setUniformValue("tex_uv", 1);
-    } else {
-        // Fallback jika UV gagal: Pakai texture kosong/hitam
-        // Ini akan membuat gambar jadi Hijau Grayscale
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, 0); 
+        m_programHW.setUniformValue("tex_uv_raw", 1);
     }
+    
+    // Pass Width for shader math
+    m_programHW.setUniformValue("width", (float)frame->width);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -327,12 +337,15 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
 void QYuvOpenGLWidget::renderSoftwareFrame() {
     if (!m_programSW.bind()) return;
     if (!m_vbo.bind()) return;
+    
+    // Setup attributes (sama seperti sebelumnya)
     int vertexLoc = m_programSW.attributeLocation("vertexIn");
     m_programSW.enableAttributeArray(vertexLoc);
     m_programSW.setAttributeBuffer(vertexLoc, GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
     int texLoc = m_programSW.attributeLocation("textureIn");
     m_programSW.enableAttributeArray(texLoc);
     m_programSW.setAttributeBuffer(texLoc, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
+
     m_programSW.setUniformValue("tex_y", 0);
     m_programSW.setUniformValue("tex_u", 1);
     m_programSW.setUniformValue("tex_v", 2);
@@ -343,12 +356,18 @@ void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *data
     renderSoftwareFrame();
     m_programSW.bind();
     m_vbo.bind();
+    
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_textures[0]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); // Kembalikan ke Linear untuk SW
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeY, m_frameSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, dataY);
+
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_textures[1]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeU, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataU);
+
     glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, m_textures[2]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeV, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataV);
+
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     m_programSW.release();
 }
