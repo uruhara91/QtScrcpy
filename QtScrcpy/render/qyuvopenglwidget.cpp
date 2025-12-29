@@ -139,7 +139,7 @@ void QYuvOpenGLWidget::initializeGL()
     initTextures();
 
     // Default clear color (Black)
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
 void QYuvOpenGLWidget::initShader()
@@ -266,13 +266,13 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
         releaseHWFrame();
         m_currentHWFrame = frame;
 
-        // 2. Get DRM Descriptor
-        // Descriptor ini dibuat oleh mapping di Decoder.cpp
         const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
-        if (!desc) return;
+        if (!desc) {
+            qWarning() << "[HW] Error: DRM Descriptor is NULL";
+            return;
+        }
 
         // 3. Create EGL Image Attribute List
-        // Intel Gen 11 butuh Modifier!
         EGLint attribs[50];
         int i = 0;
         attribs[i++] = EGL_WIDTH;
@@ -290,7 +290,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
         attribs[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
         attribs[i++] = desc->layers[0].planes[0].pitch;
         
-        // Modifier (Critical for Intel)
         if (desc->objects[desc->layers[0].planes[0].object_index].format_modifier != DRM_FORMAT_MOD_INVALID) {
             attribs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
             attribs[i++] = desc->objects[desc->layers[0].planes[0].object_index].format_modifier & 0xFFFFFFFF;
@@ -298,7 +297,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
             attribs[i++] = desc->objects[desc->layers[0].planes[0].object_index].format_modifier >> 32;
         }
 
-        // Jika NV12 (biasanya 2 planes), kita perlu Plane 1 juga
+        // Plane 1 (UV) - Biasanya NV12 butuh ini
         if (desc->layers[0].nb_planes > 1) {
             attribs[i++] = EGL_DMA_BUF_PLANE1_FD_EXT;
             attribs[i++] = desc->objects[desc->layers[0].planes[1].object_index].fd;
@@ -319,8 +318,11 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
 
         // 4. Create EGL Image
         m_eglImage = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
+        
         if (m_eglImage == EGL_NO_IMAGE_KHR) {
-            qWarning() << "Failed to create EGLImageKHR";
+            // Log Error EGL jika gagal
+            EGLint error = eglGetError();
+            qWarning() << "[HW] Failed to create EGLImage! Error Code:" << Qt::hex << error;
             return;
         }
     }
@@ -331,25 +333,28 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame)
     m_programHW.bind();
     m_vbo.bind();
 
-    // Bind Attributes
-    // "vertexIn" location
     int vertexLocation = m_programHW.attributeLocation("vertexIn");
     m_programHW.enableAttributeArray(vertexLocation);
     m_programHW.setAttributeBuffer(vertexLocation, GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
 
-    // "textureIn" location
     int textureLocation = m_programHW.attributeLocation("textureIn");
     m_programHW.enableAttributeArray(textureLocation);
     m_programHW.setAttributeBuffer(textureLocation, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
 
-    // Bind EGL Image to Texture
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(0x8D65, m_textures[3]); // GL_TEXTURE_EXTERNAL_OES
+    
+    // Bind EGL Image ke Texture
     m_glEGLImageTargetTexture2DOES(0x8D65, m_eglImage);
+    
+    // Cek error OpenGL setelah binding
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR) {
+        qWarning() << "[HW] GL Error after EGLImageTargetTexture2DOES:" << Qt::hex << err;
+    }
     
     m_programHW.setUniformValue("tex_external", 0);
 
-    // Draw
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
     m_programHW.disableAttributeArray(vertexLocation);
