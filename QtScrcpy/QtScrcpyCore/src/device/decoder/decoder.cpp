@@ -1,4 +1,5 @@
 #include <QDebug>
+#include <QThread>
 #include "compat.h"
 #include "decoder.h"
 #include "videobuffer.h"
@@ -65,6 +66,7 @@ bool Decoder::initHWDecoder(const AVCodec *codec)
 
 bool Decoder::open()
 {
+    QThread::currentThread()->setPriority(QThread::TimeCriticalPriority);
     // Cari decoder H.264
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
     if (!codec) {
@@ -137,14 +139,13 @@ bool Decoder::push(const AVPacket *packet)
                  return false;
             }
 
-            // Flag AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_WRITE kadang diperlukan, atau 0.
             // Map ke DRM_PRIME
             mappedFrame->format = AV_PIX_FMT_DRM_PRIME;
-            int mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_WRITE);
+            int mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ);
             
+            // Fallback (jarang terjadi, tapi just in case)
             if (mapRet < 0) {
-                // Jika gagal map read/write, coba read only
-                mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ);
+                mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_WRITE);
             }
 
             if (mapRet == 0) {
