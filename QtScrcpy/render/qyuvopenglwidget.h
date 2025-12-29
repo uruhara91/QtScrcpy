@@ -5,6 +5,7 @@
 #include <QOpenGLFunctions>
 #include <QOpenGLBuffer>
 #include <QOpenGLShaderProgram>
+#include <QOpenGLVertexArrayObject> // <--- OPTIMIZATION: Added VAO
 #include <QMutex>
 
 // --- EGL & DRM Dependencies ---
@@ -15,8 +16,8 @@
 // Forward Declaration
 class VideoBuffer;
 struct AVFrame;
-struct AVDRMPlaneDescriptor;  // <-- TAMBAHAN PENTING
-struct AVDRMObjectDescriptor; // <-- TAMBAHAN PENTING
+struct AVDRMPlaneDescriptor;
+struct AVDRMObjectDescriptor;
 
 class QYuvOpenGLWidget
     : public QOpenGLWidget
@@ -57,14 +58,14 @@ private:
     // Helper cleanup
     void releaseHWFrame();
 
-    // --- FUNGSI BARU YANG KETINGGALAN ---
     EGLImageKHR createImageFromPlane(const AVDRMPlaneDescriptor &plane, int width, int height, const AVDRMObjectDescriptor &obj);
-    // ------------------------------------
 
 private:
     QSize m_frameSize = { -1, -1 };
     VideoBuffer *m_vb = nullptr;
+    
     QOpenGLBuffer m_vbo;
+    QOpenGLVertexArrayObject m_vao; // <--- OPTIMIZATION: The VAO Handle
     
     QOpenGLShaderProgram m_programSW;
     QOpenGLShaderProgram m_programHW;
@@ -74,7 +75,6 @@ private:
     GLuint m_textures[4] = {0, 0, 0, 0};
 
     // --- EGL Zero-Copy Resources ---
-    // Kita butuh 2 image untuk NV12: Satu untuk Y, Satu untuk UV
     EGLImageKHR m_eglImageY = EGL_NO_IMAGE_KHR;
     EGLImageKHR m_eglImageUV = EGL_NO_IMAGE_KHR;
     

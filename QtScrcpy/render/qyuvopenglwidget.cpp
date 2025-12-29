@@ -12,14 +12,16 @@ extern "C" {
 #define DRM_FORMAT_R8 fourcc_code('R', '8', ' ', ' ')
 #endif
 
+// Vertex data: XYZ position + UV coordinate
 static const GLfloat coordinate[] = {
-    -1.0f, -1.0f, 0.0f,         0.0f, 1.0f,
-     1.0f, -1.0f, 0.0f,         1.0f, 1.0f,
-    -1.0f,  1.0f, 0.0f,         0.0f, 0.0f,
-     1.0f,  1.0f, 0.0f,         1.0f, 0.0f
+    // X, Y, Z,           U, V
+    -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
+     1.0f, -1.0f, 0.0f,   1.0f, 1.0f,
+    -1.0f,  1.0f, 0.0f,   0.0f, 0.0f,
+     1.0f,  1.0f, 0.0f,   1.0f, 0.0f
 };
 
-// --- SHADER SOFTWARE ---
+// --- SHADER SOFTWARE (Optimized) ---
 static const char *vertShaderSW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -41,6 +43,7 @@ static const char *fragShaderSW = R"(
         yuv.x = texture2D(tex_y, textureOut).r;
         yuv.y = texture2D(tex_u, textureOut).r - 0.5;
         yuv.z = texture2D(tex_v, textureOut).r - 0.5;
+        // BT.601 conversion (Standard for SW decode)
         rgb = mat3(1.0, 1.0, 1.0,
                    0.0, -0.39465, 2.03211,
                    1.13983, -0.58060, 0.0) * yuv;
@@ -48,7 +51,7 @@ static const char *fragShaderSW = R"(
     }
 )";
 
-// --- SHADER HARDWARE (LIMITED RANGE BT.709 FIX) ---
+// --- SHADER HARDWARE (VECTORIZED & OPTIMIZED) ---
 static const char *vertShaderHW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -60,50 +63,56 @@ static const char *vertShaderHW = R"(
 )";
 
 static const char *fragShaderHW = R"(
+    // Precision Hint: Good for mobile/embedded GPU performance
+    #ifdef GL_ES
+    precision mediump float;
+    #endif
+
     varying vec2 textureOut;
     uniform sampler2D tex_y;      // Y Plane (R8)
     uniform sampler2D tex_uv_raw; // UV Plane (R8 Raw)
-    uniform float width;          // Lebar Texture
+    uniform float width;          // Texture Width
+
+    // Pre-calculated vectors for BT.709 (HDTV Standard)
+    const vec3 coeff_r = vec3(1.0, 0.0, 1.7927);
+    const vec3 coeff_g = vec3(1.0, -0.2132, -0.5329);
+    const vec3 coeff_b = vec3(1.0, 2.1124, 0.0);
 
     void main(void) {
-        float y, u, v, r, g, b;
+        float y, u, v;
 
-        // 1. Ambil Y (Luminance)
+        // 1. Fetch Y (Luminance)
         y = texture2D(tex_y, textureOut).r;
 
-        // 2. Ambil UV (Chroma)
-        // Teknik "Pixel Center Sampling" untuk hindari garis hijau
+        // 2. Fetch UV (Chroma) with Pixel Center Sampling (Anti-Artifacts)
+        // Optimization: Simplify math for coordinate calculation
         float texelSize = 1.0 / width;
         float pixelPos = textureOut.x * width;
-        float u_x_pixel = floor(pixelPos / 2.0) * 2.0 + 0.5;
         
-        float u_x = u_x_pixel * texelSize;
+        // Logic: floor(pos / 2) * 2 + 0.5 -> Mencari tengah-tengah dari blok 2x2
+        float u_x = (floor(pixelPos * 0.5) * 2.0 + 0.5) * texelSize;
         float v_x = u_x + texelSize; 
         
-        float raw1 = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r;
-        float raw2 = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r;
+        // Reading UV (And centering it by subtracting 0.5)
+        u = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r - 0.5; 
+        v = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r - 0.5; 
 
-        // SWAP FIX: Byte Genap = U, Byte Ganjil = V
-        u = raw1 - 0.5; 
-        v = raw2 - 0.5; 
-
-        // 3. COLOR CORRECTION: BT.709 LIMITED RANGE
-        // Masalah "Butek" terjadi karena sinyal Limited (16-235) dibaca sebagai Full (0-255).
-        // Kita harus expand: (Y - 16/255) * (255/219)
+        // 3. COLOR CORRECTION: Limited Range Fix + BT.709
+        // Vectorized Math for GPU Efficiency
         
-        // Faktor koreksi Y (1.164 adalah scale factor untuk Limited Range)
-        y = 1.1643 * (y - 0.0627); 
+        // Expand Limited Range Y (16-235) to Full Range (0-255)
+        // Original Formula: y = 1.1643 * (y - 0.0627);
+        y = (y - 0.0627) * 1.1643;
 
-        // Rumus BT.709 (HDTV Standard) - Lebih akurat untuk Android modern
-        // R = Y + 1.793 * V
-        // G = Y - 0.213 * U - 0.533 * V
-        // B = Y + 2.112 * U
-        
-        r = y + 1.7927 * v;
-        g = y - 0.2132 * u - 0.5329 * v;
-        b = y + 2.1124 * u;
+        vec3 yuv = vec3(y, u, v);
+        vec3 rgb;
 
-        gl_FragColor = vec4(r, g, b, 1.0);
+        // Dot Product is native GPU instruction (1 cycle usually)
+        rgb.r = dot(yuv, coeff_r);
+        rgb.g = dot(yuv, coeff_g);
+        rgb.b = dot(yuv, coeff_b);
+
+        gl_FragColor = vec4(rgb, 1.0);
     }
 )";
 
@@ -113,6 +122,7 @@ QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     makeCurrent();
     releaseHWFrame();
     deInitTextures();
+    m_vao.destroy(); // Destroy VAO
     m_vbo.destroy();
     doneCurrent();
 }
@@ -141,25 +151,49 @@ void QYuvOpenGLWidget::initializeGL() {
         qWarning() << "[HW] Critical: Failed to load EGL extensions!";
     }
 
+    initShader();
+    initTextures();
+
+    // --- OPTIMIZATION: VAO SETUP ---
+    // Kita setup state OpenGL SEKALI saja di sini, bukan setiap frame.
+    m_vao.create();
+    m_vao.bind();
+
     m_vbo.create();
     m_vbo.bind();
     m_vbo.allocate(coordinate, sizeof(coordinate));
 
-    initShader();
-    initTextures();
+    // Define Attributes layout
+    // Karena input vertex & texture coord sama untuk HW dan SW shader,
+    // kita cukup setup pointer-nya sekali di VAO ini.
+    
+    // Vertex Pos (vec3) - Location 0/vertexIn
+    m_programHW.enableAttributeArray("vertexIn");
+    m_programHW.setAttributeBuffer("vertexIn", GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
+    
+    // Texture Coord (vec2) - Location 1/textureIn
+    m_programHW.enableAttributeArray("textureIn");
+    m_programHW.setAttributeBuffer("textureIn", GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
+
+    m_vbo.release();
+    m_vao.release();
+    // -------------------------------
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
 void QYuvOpenGLWidget::initShader() {
-    m_programSW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderSW);
-    m_programSW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderSW);
+    // Compile shaders
+    if (!m_programSW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderSW))
+        qCritical() << "SW Vertex Shader Error:" << m_programSW.log();
+    if (!m_programSW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderSW))
+        qCritical() << "SW Frag Shader Error:" << m_programSW.log();
     m_programSW.link();
 
-    m_programHW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderHW);
-    if (!m_programHW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderHW)) {
-        qCritical() << "[HW] Shader Error:" << m_programHW.log();
-    }
+    if (!m_programHW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderHW))
+        qCritical() << "HW Vertex Shader Error:" << m_programHW.log();
+    if (!m_programHW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderHW))
+        qCritical() << "HW Frag Shader Error:" << m_programHW.log();
     m_programHW.link();
 }
 
@@ -167,13 +201,9 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        if (i == 3) { 
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        } else {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        }
+        // Linear sampling untuk visual lebih halus
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
@@ -197,7 +227,13 @@ void QYuvOpenGLWidget::paintGL() {
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     m_vb->unLock();
 
+    // --- OPTIMIZATION: BIND VAO ONCE ---
+    // Tidak perlu lagi enableAttributeArray & setAttributeBuffer setiap kali paint.
+    // Cukup bind VAO yang sudah merekam state itu.
+    QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
+
     if (!frame && m_currentHWFrame) {
+        // Redraw last HW frame (e.g. resize window)
         renderHardwareFrame(nullptr);
         return;
     }
@@ -263,14 +299,16 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         const AVDRMPlaneDescriptor *planeY = nullptr;
         const AVDRMPlaneDescriptor *planeUV = nullptr;
 
+        // --- INTEL/AMD LOGIC KEPT INTACT (User Request) ---
+        // Ini logic sakral kamu, jangan diubah!
         if (desc->nb_layers > 0) {
             planeY = &desc->layers[0].planes[0];
         }
 
         if (desc->nb_layers > 1) {
-            planeUV = &desc->layers[1].planes[0];
+            planeUV = &desc->layers[1].planes[0]; // Intel Gen 11+ Style
         } else if (desc->layers[0].nb_planes > 1) {
-            planeUV = &desc->layers[0].planes[1];
+            planeUV = &desc->layers[0].planes[1]; // AMD/Standard Style
         }
 
         if (planeY) {
@@ -287,23 +325,14 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (m_eglImageY == EGL_NO_IMAGE_KHR) return;
 
     m_programHW.bind();
-    m_vbo.bind();
+    // Note: VAO is already bound in paintGL!
 
-    int vertexLoc = m_programHW.attributeLocation("vertexIn");
-    m_programHW.enableAttributeArray(vertexLoc);
-    m_programHW.setAttributeBuffer(vertexLoc, GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
-
-    int textureLoc = m_programHW.attributeLocation("textureIn");
-    m_programHW.enableAttributeArray(textureLoc);
-    m_programHW.setAttributeBuffer(textureLoc, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
-
-    // Bind Y
+    // Bind Texture Units
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageY);
     m_programHW.setUniformValue("tex_y", 0);
 
-    // Bind UV
     if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, m_textures[1]);
@@ -311,40 +340,32 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         m_programHW.setUniformValue("tex_uv_raw", 1);
     }
 
-    m_programHW.setUniformValue("width", (float)frame->width);
+    m_programHW.setUniformValue("width", (float)m_frameSize.width());
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-    m_programHW.disableAttributeArray(vertexLoc);
-    m_programHW.disableAttributeArray(textureLoc);
+    
     m_programHW.release();
 }
 
 void QYuvOpenGLWidget::renderSoftwareFrame() {
-    if (!m_programSW.bind()) return;
-    if (!m_vbo.bind()) return;
-    int vertexLoc = m_programSW.attributeLocation("vertexIn");
-    m_programSW.enableAttributeArray(vertexLoc);
-    m_programSW.setAttributeBuffer(vertexLoc, GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
-    int texLoc = m_programSW.attributeLocation("textureIn");
-    m_programSW.enableAttributeArray(texLoc);
-    m_programSW.setAttributeBuffer(texLoc, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
+    // VAO sudah bound di paintGL, jadi attribute pointers sudah aman.
+    m_programSW.bind();
     m_programSW.setUniformValue("tex_y", 0);
     m_programSW.setUniformValue("tex_u", 1);
     m_programSW.setUniformValue("tex_v", 2);
 }
 
 void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV) {
-    releaseHWFrame();
+    // Fungsi ini dipanggil hanya saat fallback Software
     renderSoftwareFrame();
-    m_programSW.bind();
-    m_vbo.bind();
+    
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeY, m_frameSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, dataY);
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeU, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataU);
     glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, m_textures[2]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeV, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataV);
+    
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     m_programSW.release();
 }
