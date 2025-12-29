@@ -8,15 +8,19 @@ extern "C" {
 #include <libavutil/hwcontext_drm.h>
 }
 
-// Fallback define jika header sistem belum update
+// DEFINISI FORMAT DRM
+// Kita coba RG88 (R=Byte0, G=Byte1)
 #ifndef DRM_FORMAT_R8
 #define DRM_FORMAT_R8 fourcc_code('R', '8', ' ', ' ')
+#endif
+#ifndef DRM_FORMAT_RG88
+#define DRM_FORMAT_RG88 fourcc_code('R', 'G', '8', '8')
 #endif
 #ifndef DRM_FORMAT_GR88
 #define DRM_FORMAT_GR88 fourcc_code('G', 'R', '8', '8')
 #endif
 
-// Vertices & Texture Coords
+// Vertices
 static const GLfloat coordinate[] = {
     -1.0f, -1.0f, 0.0f,         0.0f, 1.0f,
      1.0f, -1.0f, 0.0f,         1.0f, 1.0f,
@@ -24,7 +28,6 @@ static const GLfloat coordinate[] = {
      1.0f,  1.0f, 0.0f,         1.0f, 0.0f
 };
 
-// --- SHADER SOFTWARE (Legacy) ---
 static const char *vertShaderSW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -53,7 +56,7 @@ static const char *fragShaderSW = R"(
     }
 )";
 
-// --- SHADER HARDWARE (FULL COLOR NV12) ---
+// --- SHADER HARDWARE (FIXED UV) ---
 static const char *vertShaderHW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -66,8 +69,8 @@ static const char *vertShaderHW = R"(
 
 static const char *fragShaderHW = R"(
     varying vec2 textureOut;
-    uniform sampler2D tex_y;  // R8 Texture (Y Plane)
-    uniform sampler2D tex_uv; // GR88 Texture (UV Plane)
+    uniform sampler2D tex_y;  // R8
+    uniform sampler2D tex_uv; // RG88
 
     void main(void) {
         float y, u, v, r, g, b;
@@ -76,19 +79,15 @@ static const char *fragShaderHW = R"(
         y = texture2D(tex_y, textureOut).r;
 
         // 2. Ambil UV
-        // Di format NV12: Byte 0 = U, Byte 1 = V
-        // Di format Texture GR88 (Little Endian): R = Byte 0, G = Byte 1
-        // Jadi: R = U, G = V
-        vec2 uv = texture2D(tex_uv, textureOut).rg;
-        u = uv.r - 0.5;
-        v = uv.g - 0.5;
-
-        // 3. Konversi YUV ke RGB (BT.601)
-        // Rumus standar:
-        // R = Y + 1.402 * V
-        // G = Y - 0.344136 * U - 0.714136 * V
-        // B = Y + 1.772 * U
+        // Kita gunakan format RG88.
+        // Biasanya: R = Byte 0 (U), G = Byte 1 (V)
+        // Jika wajah jadi Biru/Merah tertukar, kita tinggal tukar .r dan .g di sini.
+        vec2 uvPixel = texture2D(tex_uv, textureOut).rg;
         
+        u = uvPixel.r - 0.5;
+        v = uvPixel.g - 0.5;
+
+        // 3. Konversi
         r = y + 1.402 * v;
         g = y - 0.344136 * u - 0.714136 * v;
         b = y + 1.772 * u;
@@ -138,17 +137,14 @@ void QYuvOpenGLWidget::initializeGL() {
     initShader();
     initTextures();
 
-    // Kembalikan ke Hitam Pekat (atau transparent 0.0 jika mau floating)
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
 void QYuvOpenGLWidget::initShader() {
-    // SW
     m_programSW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderSW);
     m_programSW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderSW);
     m_programSW.link();
 
-    // HW
     m_programHW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderHW);
     if (!m_programHW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderHW)) {
         qCritical() << "[HW] Shader Error:" << m_programHW.log();
@@ -186,7 +182,6 @@ void QYuvOpenGLWidget::paintGL() {
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     m_vb->unLock();
 
-    // Handle repaint frame terakhir
     if (!frame && m_currentHWFrame) {
         renderHardwareFrame(nullptr);
         return;
@@ -222,7 +217,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
         if (!desc || desc->nb_layers < 1) return;
 
-        // --- 1. Buat Image Y (Plane 0) ---
+        // --- 1. Image Y (R8) ---
         EGLint attribsY[50];
         int i = 0;
         attribsY[i++] = EGL_WIDTH;
@@ -230,7 +225,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         attribsY[i++] = EGL_HEIGHT;
         attribsY[i++] = frame->height;
         attribsY[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-        attribsY[i++] = DRM_FORMAT_R8; // R8 for Y
+        attribsY[i++] = DRM_FORMAT_R8;
         attribsY[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
         attribsY[i++] = desc->objects[desc->layers[0].planes[0].object_index].fd;
         attribsY[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
@@ -248,16 +243,21 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         
         m_eglImageY = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribsY);
 
-        // --- 2. Buat Image UV (Plane 1) ---
+        // --- 2. Image UV (RG88) ---
+        // GANTI KE RG88 DARI GR88!
         if (desc->layers[0].nb_planes > 1) {
             EGLint attribsUV[50];
             i = 0;
             attribsUV[i++] = EGL_WIDTH;
-            attribsUV[i++] = frame->width / 2; // Subsampling: Width/2
+            attribsUV[i++] = frame->width / 2;
             attribsUV[i++] = EGL_HEIGHT;
-            attribsUV[i++] = frame->height / 2; // Subsampling: Height/2
+            attribsUV[i++] = frame->height / 2;
             attribsUV[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-            attribsUV[i++] = DRM_FORMAT_GR88; // GR88 for UV (16 bit/pixel)
+            
+            // --- CHANGE IS HERE ---
+            attribsUV[i++] = DRM_FORMAT_RG88; 
+            // ----------------------
+            
             attribsUV[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
             attribsUV[i++] = desc->objects[desc->layers[0].planes[1].object_index].fd;
             attribsUV[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
@@ -274,10 +274,17 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
             attribsUV[i++] = EGL_NONE;
 
             m_eglImageUV = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribsUV);
+            
+            // Debug Log untuk UV
+            if (m_eglImageUV == EGL_NO_IMAGE_KHR) {
+                EGLint err = eglGetError();
+                qWarning() << "[HW] Failed to create UV Image (RG88)! Err:" << Qt::hex << err;
+                // Jika gagal, set pointer ke NULL agar render jalan terus (sebagai grayscale hijau)
+                m_eglImageUV = EGL_NO_IMAGE_KHR;
+            }
         }
     }
 
-    // Pastikan kedua Image ada (kecuali video B/W tanpa UV)
     if (m_eglImageY == EGL_NO_IMAGE_KHR) return;
 
     m_programHW.bind();
@@ -291,18 +298,23 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     m_programHW.enableAttributeArray(textureLoc);
     m_programHW.setAttributeBuffer(textureLoc, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
 
-    // Bind Y to Texture Unit 0
+    // Bind Y
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageY);
     m_programHW.setUniformValue("tex_y", 0);
 
-    // Bind UV to Texture Unit 1 (Jika ada)
+    // Bind UV (Jika ada)
     if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, m_textures[1]);
         m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageUV);
         m_programHW.setUniformValue("tex_uv", 1);
+    } else {
+        // Fallback jika UV gagal: Pakai texture kosong/hitam
+        // Ini akan membuat gambar jadi Hijau Grayscale
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, 0); 
     }
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -315,15 +327,12 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
 void QYuvOpenGLWidget::renderSoftwareFrame() {
     if (!m_programSW.bind()) return;
     if (!m_vbo.bind()) return;
-
     int vertexLoc = m_programSW.attributeLocation("vertexIn");
     m_programSW.enableAttributeArray(vertexLoc);
     m_programSW.setAttributeBuffer(vertexLoc, GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
-
     int texLoc = m_programSW.attributeLocation("textureIn");
     m_programSW.enableAttributeArray(texLoc);
     m_programSW.setAttributeBuffer(texLoc, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
-    
     m_programSW.setUniformValue("tex_y", 0);
     m_programSW.setUniformValue("tex_u", 1);
     m_programSW.setUniformValue("tex_v", 2);
@@ -334,16 +343,12 @@ void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *data
     renderSoftwareFrame();
     m_programSW.bind();
     m_vbo.bind();
-    
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeY, m_frameSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, dataY);
-
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeU, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataU);
-
     glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, m_textures[2]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeV, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataV);
-
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     m_programSW.release();
 }
