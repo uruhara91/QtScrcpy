@@ -1,5 +1,7 @@
 #include <QCoreApplication>
 #include <QDebug>
+#include <QFile>
+#include <QTextStream>
 #include "qyuvopenglwidget.h"
 #include "../../QtScrcpyCore/src/device/decoder/videobuffer.h"
 
@@ -12,6 +14,7 @@ extern "C" {
 #define DRM_FORMAT_R8 fourcc_code('R', '8', ' ', ' ')
 #endif
 
+// Vertices
 static const GLfloat coordinate[] = {
     -1.0f, -1.0f, 0.0f,         0.0f, 1.0f,
      1.0f, -1.0f, 0.0f,         1.0f, 1.0f,
@@ -48,7 +51,8 @@ static const char *fragShaderSW = R"(
     }
 )";
 
-// --- SHADER HARDWARE (MANUAL DE-INTERLEAVE) ---
+// --- SHADER HARDWARE (SINGLE GIANT TEXTURE) ---
+// Kita membaca Y dan UV dari satu texture R8 besar.
 static const char *vertShaderHW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -61,41 +65,36 @@ static const char *vertShaderHW = R"(
 
 static const char *fragShaderHW = R"(
     varying vec2 textureOut;
-    uniform sampler2D tex_y;      // Y Plane (R8)
-    uniform sampler2D tex_uv_raw; // UV Plane dibaca sebagai R8 (Raw Bytes: U V U V...)
-    uniform float width;          // Lebar video untuk kalkulasi pixel
+    uniform sampler2D tex_all;    // Satu texture R8 berisi Y dan UV
+    uniform float uv_y_start;     // Posisi normalisasi (0.0-1.0) dimana UV mulai
+    uniform float y_height_norm;  // Tinggi normalisasi area Y
+    uniform float width;          // Lebar texture (untuk de-interleave UV)
 
     void main(void) {
         float y, u, v, r, g, b;
 
-        // 1. Ambil Y (Normal)
-        y = texture2D(tex_y, textureOut).r;
+        // 1. Ambil Y
+        // Y ada di bagian atas texture
+        // Koordinat Y shader (0-1) harus dipetakan ke area Y di texture (0 - y_height_norm)
+        vec2 coordY = vec2(textureOut.x, textureOut.y * y_height_norm);
+        y = texture2D(tex_all, coordY).r;
 
-        // 2. Ambil UV dari Raw R8 Texture
-        // Karena kita import UV sebagai R8, texturenya berisi [U, V, U, V, ...]
-        // Lebar texture Raw ini sama dengan lebar Video (dalam bytes).
-        // Kita harus mengambil byte U (genap) dan byte V (ganjil) yang sesuai.
-        
-        // Posisi horizontal saat ini (0.0 - 1.0)
-        float x = textureOut.x;
-        
-        // Karena subsampling 4:2:0, satu pasang UV berlaku untuk 2 pixel Y horizontal.
-        // Kita cari posisi 'pasangan' UV terdekat.
-        // Step 1 pixel di texture raw adalah 1.0 / width.
-        // Kita mau index genap (U) terdekat di sebelah kiri.
+        // 2. Ambil UV
+        // UV ada di bagian bawah texture (mulai dari uv_y_start)
+        // Kita harus de-interleave U dan V (U=genap, V=ganjil)
         
         float texelSize = 1.0 / width;
         
-        // Cari koordinat U (harus pixel genap di texture Raw)
-        // floor(x * width / 2.0) * 2.0 mengembalikan index pixel 0, 2, 4...
-        float u_coord = (floor(x * width / 2.0) * 2.0) * texelSize;
+        // Cari koordinat X untuk U (genap terdekat)
+        float u_x = (floor(textureOut.x * width / 2.0) * 2.0) * texelSize;
+        float v_x = u_x + texelSize;
         
-        // Koordinat V adalah pixel sebelahnya (ganjil)
-        float v_coord = u_coord + texelSize;
+        // Koordinat Y untuk UV: dipetakan dari (0-1) ke area UV di texture
+        // Area UV tingginya setengah Y.
+        float uv_tex_y = uv_y_start + (textureOut.y * (y_height_norm / 2.0));
         
-        // Sample (Gunakan koordinat Y yang sama)
-        u = texture2D(tex_uv_raw, vec2(u_coord, textureOut.y)).r - 0.5;
-        v = texture2D(tex_uv_raw, vec2(v_coord, textureOut.y)).r - 0.5;
+        u = texture2D(tex_all, vec2(u_x, uv_tex_y)).r - 0.5;
+        v = texture2D(tex_all, vec2(v_x, uv_tex_y)).r - 0.5;
 
         // 3. Konversi
         r = y + 1.402 * v;
@@ -164,18 +163,11 @@ void QYuvOpenGLWidget::initShader() {
 
 void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
-    // Init semua sebagai TEXTURE_2D
+    // Init semua sebagai TEXTURE_2D dengan NEAREST filter (penting untuk manual de-interleave)
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        // PENTING: Gunakan NEAREST untuk texture UV Raw agar kita bisa baca byte tepat!
-        // Kalau LINEAR, nilai U dan V akan tercampur (interpolasi) dan warna jadi aneh.
-        if (i == 3) { // Index 3 adalah UV Raw
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        } else {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
@@ -219,11 +211,44 @@ void QYuvOpenGLWidget::releaseHWFrame() {
         m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageY);
         m_eglImageY = EGL_NO_IMAGE_KHR;
     }
-    if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
-        m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageUV);
-        m_eglImageUV = EGL_NO_IMAGE_KHR;
-    }
     m_currentHWFrame = nullptr;
+}
+
+// --- DEBUGGER OTOMATIS ---
+// Fungsi ini akan menulis info frame ke /tmp/qtscrcpy_debug.txt sekali saja
+void dumpFrameInfo(const AVFrame *frame, const AVDRMFrameDescriptor *desc) {
+    static bool dumped = false;
+    if (dumped) return;
+    
+    QFile f("/tmp/qtscrcpy_debug.txt");
+    if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream out(&f);
+        out << "=== QtScrcpy HW Debug Info ===\n";
+        out << "Resolution: " << frame->width << "x" << frame->height << "\n";
+        out << "Format: " << frame->format << "\n";
+        out << "DRM Layers: " << desc->nb_layers << "\n";
+        
+        if (desc->nb_layers > 0) {
+            out << "Layer 0 Format: " << Qt::hex << desc->layers[0].format << "\n";
+            out << "Layer 0 Planes: " << desc->layers[0].nb_planes << "\n";
+            for (int i = 0; i < desc->layers[0].nb_planes; ++i) {
+                out << "  Plane " << i << ":\n";
+                out << "    Object Index: " << desc->layers[0].planes[i].object_index << "\n";
+                out << "    Offset: " << desc->layers[0].planes[i].offset << "\n";
+                out << "    Pitch: " << desc->layers[0].planes[i].pitch << "\n";
+            }
+            // Check objects
+            out << "DRM Objects:\n";
+            for (int i = 0; i < desc->nb_objects; ++i) {
+                out << "  Object " << i << ": FD=" << desc->objects[i].fd 
+                    << " Size=" << desc->objects[i].size 
+                    << " Mod=" << Qt::hex << desc->objects[i].format_modifier << "\n";
+            }
+        }
+        f.close();
+        qWarning() << "[HW] Debug info dumped to /tmp/qtscrcpy_debug.txt";
+    }
+    dumped = true;
 }
 
 void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
@@ -234,63 +259,66 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
         if (!desc || desc->nb_layers < 1) return;
 
-        // --- 1. Image Y (R8) ---
-        EGLint attribsY[50];
+        // DUMP DEBUG INFO (Tanpa Recompile lagi!)
+        dumpFrameInfo(frame, desc);
+
+        // --- STRATEGI: SINGLE TEXTURE ---
+        // Kita hitung total tinggi texture yang dibutuhkan untuk menampung Y dan UV
+        // Asumsi: UV plane ada setelah Y plane di memori yang sama
+        // Offset Plane 1 = Lokasi mulai UV
+        // Pitch Plane 0 = Stride
+        
+        uint32_t stride = desc->layers[0].planes[0].pitch;
+        uint32_t uv_offset = desc->layers[0].planes[1].offset;
+        uint32_t uv_size = desc->layers[0].planes[1].pitch * (frame->height / 2); // Estimasi size UV
+        
+        // Total bytes yang harus dicover texture
+        uint32_t total_bytes = uv_offset + uv_size;
+        
+        // Hitung tinggi texture R8 yang dibutuhkan: (Total Bytes / Stride)
+        int texture_height = (total_bytes + stride - 1) / stride;
+
+        // Buat EGL Image Raksasa (R8)
+        EGLint attribs[50];
         int i = 0;
-        attribsY[i++] = EGL_WIDTH;
-        attribsY[i++] = frame->width;
-        attribsY[i++] = EGL_HEIGHT;
-        attribsY[i++] = frame->height;
-        attribsY[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-        attribsY[i++] = DRM_FORMAT_R8;
-        attribsY[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-        attribsY[i++] = desc->objects[desc->layers[0].planes[0].object_index].fd;
-        attribsY[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-        attribsY[i++] = desc->layers[0].planes[0].offset;
-        attribsY[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-        attribsY[i++] = desc->layers[0].planes[0].pitch;
+        attribs[i++] = EGL_WIDTH;
+        attribs[i++] = frame->width; // Asumsi Stride ~= Width
+        attribs[i++] = EGL_HEIGHT;
+        attribs[i++] = texture_height; // Tinggi yang disesuaikan
+        attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT;
+        attribs[i++] = DRM_FORMAT_R8;
         
-        if (desc->objects[desc->layers[0].planes[0].object_index].format_modifier != DRM_FORMAT_MOD_INVALID) {
-            attribsY[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
-            attribsY[i++] = desc->objects[desc->layers[0].planes[0].object_index].format_modifier & 0xFFFFFFFF;
-            attribsY[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
-            attribsY[i++] = desc->objects[desc->layers[0].planes[0].object_index].format_modifier >> 32;
-        }
-        attribsY[i++] = EGL_NONE;
+        attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
+        attribs[i++] = desc->objects[0].fd; // Asumsi Plane 0 dan 1 di FD yang sama (Object 0)
+        attribs[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+        attribs[i++] = 0; // Mulai dari 0 (Awal Y)
+        attribs[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
+        attribs[i++] = stride;
         
-        m_eglImageY = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribsY);
-
-        // --- 2. Image UV (R8 - RAW) ---
-        // TRICK: Kita baca UV Plane sebagai R8 juga!
-        // Lebar = Full Width (karena stride UV plane = Width Bytes)
-        // Tinggi = Half Height.
-        if (desc->layers[0].nb_planes > 1) {
-            EGLint attribsUV[50];
-            i = 0;
-            attribsUV[i++] = EGL_WIDTH;
-            attribsUV[i++] = frame->width; // Full Width (Bytes)
-            attribsUV[i++] = EGL_HEIGHT;
-            attribsUV[i++] = frame->height / 2; // Half Height
-            attribsUV[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-            attribsUV[i++] = DRM_FORMAT_R8; // Treat as Raw Byte Array
-            
-            attribsUV[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-            attribsUV[i++] = desc->objects[desc->layers[0].planes[1].object_index].fd;
-            attribsUV[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-            attribsUV[i++] = desc->layers[0].planes[1].offset;
-            attribsUV[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-            attribsUV[i++] = desc->layers[0].planes[1].pitch;
-
-            if (desc->objects[desc->layers[0].planes[1].object_index].format_modifier != DRM_FORMAT_MOD_INVALID) {
-                attribsUV[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
-                attribsUV[i++] = desc->objects[desc->layers[0].planes[1].object_index].format_modifier & 0xFFFFFFFF;
-                attribsUV[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
-                attribsUV[i++] = desc->objects[desc->layers[0].planes[1].object_index].format_modifier >> 32;
-            }
-            attribsUV[i++] = EGL_NONE;
-
-            m_eglImageUV = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribsUV);
+        if (desc->objects[0].format_modifier != DRM_FORMAT_MOD_INVALID) {
+            attribs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+            attribs[i++] = desc->objects[0].format_modifier & 0xFFFFFFFF;
+            attribs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+            attribs[i++] = desc->objects[0].format_modifier >> 32;
         }
+        attribs[i++] = EGL_NONE;
+        
+        m_eglImageY = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
+        
+        if (m_eglImageY == EGL_NO_IMAGE_KHR) {
+             qWarning() << "[HW] Failed to create Single Giant Texture!";
+             return;
+        }
+        
+        // Setup Uniforms untuk Shader
+        // Hitung posisi normalisasi Y dan UV di dalam texture raksasa
+        float y_h_norm = (float)frame->height / texture_height;
+        float uv_start_norm = (float)uv_offset / stride / texture_height; // Baris ke berapa UV mulai
+        
+        m_programHW.bind();
+        m_programHW.setUniformValue("y_height_norm", y_h_norm);
+        m_programHW.setUniformValue("uv_y_start", uv_start_norm);
+        m_programHW.setUniformValue("width", (float)frame->width);
     }
 
     if (m_eglImageY == EGL_NO_IMAGE_KHR) return;
@@ -306,26 +334,10 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     m_programHW.enableAttributeArray(textureLoc);
     m_programHW.setAttributeBuffer(textureLoc, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
 
-    // Bind Y to Unit 0
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageY);
-    m_programHW.setUniformValue("tex_y", 0);
-
-    // Bind UV Raw to Unit 1
-    if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, m_textures[1]); // Asumsi index 1 dipakai UV
-        // Set Nearest Filtering untuk UV Raw (Wajib agar math presisi)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        
-        m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageUV);
-        m_programHW.setUniformValue("tex_uv_raw", 1);
-    }
-    
-    // Pass Width for shader math
-    m_programHW.setUniformValue("width", (float)frame->width);
+    m_programHW.setUniformValue("tex_all", 0);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -337,15 +349,12 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
 void QYuvOpenGLWidget::renderSoftwareFrame() {
     if (!m_programSW.bind()) return;
     if (!m_vbo.bind()) return;
-    
-    // Setup attributes (sama seperti sebelumnya)
     int vertexLoc = m_programSW.attributeLocation("vertexIn");
     m_programSW.enableAttributeArray(vertexLoc);
     m_programSW.setAttributeBuffer(vertexLoc, GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
     int texLoc = m_programSW.attributeLocation("textureIn");
     m_programSW.enableAttributeArray(texLoc);
     m_programSW.setAttributeBuffer(texLoc, GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
-
     m_programSW.setUniformValue("tex_y", 0);
     m_programSW.setUniformValue("tex_u", 1);
     m_programSW.setUniformValue("tex_v", 2);
@@ -358,11 +367,9 @@ void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *data
     m_vbo.bind();
     
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_textures[0]);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); // Kembalikan ke Linear untuk SW
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeY, m_frameSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, dataY);
 
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_textures[1]);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeU, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataU);
 
     glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, m_textures[2]);
