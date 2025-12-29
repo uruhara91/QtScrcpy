@@ -291,20 +291,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE uibase)
 target_include_directories(${PROJECT_NAME} PRIVATE ui)
 target_include_directories(${PROJECT_NAME} PRIVATE render)
 
-# include
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/uibase
-    ${CMAKE_CURRENT_SOURCE_DIR}/util
-    ${CMAKE_CURRENT_SOURCE_DIR}/ui
-    ${CMAKE_CURRENT_SOURCE_DIR}/render
-    ${CMAKE_CURRENT_SOURCE_DIR}/groupcontroller
-    ${CMAKE_CURRENT_SOURCE_DIR}/fontawesome
-    ${CMAKE_CURRENT_SOURCE_DIR}/audio
-    ${CMAKE_CURRENT_SOURCE_DIR}/../QtScrcpyCore/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../QtScrcpyCore/src/device/decoder
-)
-
 # output dir
 # https://cmake.org/cmake/help/latest/prop_gbl/GENERATOR_IS_MULTI_CONFIG.html
 get_property(QC_IS_MUTIL_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
