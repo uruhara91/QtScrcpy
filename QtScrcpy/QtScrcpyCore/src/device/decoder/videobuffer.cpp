@@ -115,6 +115,17 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
 
     lock();
     auto frame = m_renderingframe;
+    
+    // --- SAFETY GUARD FOR ZERO COPY ---
+    // Jika frame kosong atau formatnya Hardware (DRM_PRIME / VAAPI), 
+    // JANGAN coba-coba convert pakai CPU (sws_scale) di sini.
+    // Nanti crash. Skip saja dulu.
+    if (!frame || frame->format == AV_PIX_FMT_DRM_PRIME || frame->format == AV_PIX_FMT_VAAPI) {
+        unLock();
+        return; 
+    }
+    // ----------------------------------
+
     int width = frame->width;
     int height = frame->height;
     int linesize = frame->linesize[0];
@@ -124,6 +135,7 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
     AVFrame *rgbFrame = av_frame_alloc();
     if (!rgbFrame) {
         delete [] rgbBuffer;
+        unLock(); // Jangan lupa unlock jika fail
         return;
     }
 
@@ -132,19 +144,24 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
 
     // convert
     AVFrameConvert convert;
-    convert.setSrcFrameInfo(width, height, AV_PIX_FMT_YUV420P);
+    // ... (sisa kode convert biarkan sama)
+    convert.setSrcFrameInfo(width, height, (AVPixelFormat)frame->format); // Gunakan format frame dinamis
     convert.setDstFrameInfo(width, height, AV_PIX_FMT_RGB32);
+    
     bool ret = false;
     ret = convert.init();
     if (!ret) {
         delete [] rgbBuffer;
         av_free(rgbFrame);
+        unLock(); // Jangan lupa unlock
         return;
     }
     ret = convert.convert(frame, rgbFrame);
     if (!ret) {
         delete [] rgbBuffer;
         av_free(rgbFrame);
+        convert.deInit(); // Pastikan deInit dipanggil
+        unLock(); // Jangan lupa unlock
         return;
     }
     convert.deInit();

@@ -227,21 +227,42 @@ endif()
 
 # Linux
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # include
-    target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/include)
-    # link
+    find_package(PkgConfig REQUIRED)
+
+    # Cek library native hardware (WAJIB untuk Zero-Copy)
+    pkg_check_modules(LIBVA libva)
+    pkg_check_modules(LIBDRM libdrm)
+    pkg_check_modules(EGL egl)
+
+    # include path ffmpeg
+    target_include_directories(${QSC_PROJECT_NAME} PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/include
+        ${LIBVA_INCLUDE_DIRS}
+        ${LIBDRM_INCLUDE_DIRS}
+        ${EGL_INCLUDE_DIRS}
+    )
+
+    # link directory ffmpeg
     set(FFMPEG_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/lib")
     target_link_directories(${QSC_PROJECT_NAME} PUBLIC ${FFMPEG_LIB_PATH})
+
     target_link_libraries(${QSC_PROJECT_NAME} PRIVATE
-        # ffmpeg
+        # Libraries native untuk Hardware Decode
+        ${LIBVA_LIBRARIES}
+        ${LIBDRM_LIBRARIES}
+        ${EGL_LIBRARIES}
+        
+        # ffmpeg static
         avformat
         avcodec
         avutil
         swscale
+        avdevice
+        
+        # System libs
         z
-    )
 
-    add_custom_command(TARGET ${QSC_PROJECT_NAME} POST_BUILD
+        add_custom_command(TARGET ${QSC_PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/adb/linux/adb" "${QSC_DEPLOY_PATH}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/scrcpy-server" "${QSC_DEPLOY_PATH}"
     )
