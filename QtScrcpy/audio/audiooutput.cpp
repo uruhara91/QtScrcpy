@@ -160,29 +160,25 @@ bool AudioOutput::start(const QString& serial, int port) {
 
     // 4. SETUP KONEKSI & PERMISSION (PENTING!)
 
-    // A. ADB REVERSE (Agar HP bisa connect ke localhost PC)
+    // A. ADB REVERSE
     QString portStr = QString::number(port);
     QString remote = QString("tcp:%1").arg(portStr);
     QString local = QString("tcp:%1").arg(portStr);
-    if (!runAdbCommand(serial, QStringList() << "reverse" << remote << local)) {
-        qWarning() << "[Audio] ADB Reverse failed. Audio streaming might fail.";
-    } else {
-        qInfo() << "[Audio] ADB Reverse success:" << port;
-    }
+    runAdbCommand(serial, QStringList() << "reverse" << remote << local);
 
-    // B. AUTO GRANT PERMISSION (Agar tidak perlu klik Allow manual di HP)
-    // Izin: Microphone (RECORD_AUDIO)
-    bool permGranted = runAdbCommand(serial, QStringList()
-    << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.RECORD_AUDIO";
-    << "shell" << "appops" << "set" << APP_PACKAGE << "PROJECT_MEDIA" << "allow");
+    // B. GRANT PERMISSION
+    runAdbCommand(serial, QStringList() 
+        << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.RECORD_AUDIO");
 
-    if (permGranted) {
-        qInfo() << "[Audio] Auto-grant RECORD_AUDIO permission success";
-    } else {
-        qWarning() << "[Audio] Failed to auto-grant permission. You might need to allow manually.";
-    }
+    // C. BYPASS SCREEN CAST PROMPT
+    runAdbCommand(serial, QStringList() 
+        << "shell" << "appops" << "set" << APP_PACKAGE << "PROJECT_MEDIA" << "allow");
 
-    // 5. Jalankan Aplikasi di Android
+    // D. DISABLE AUTO REVOKE
+    runAdbCommand(serial, QStringList() 
+        << "shell" << "appops" << "set" << APP_PACKAGE << "AUTO_REVOKE_PERMISSIONS_IF_UNUSED" << "ignore");
+
+    // 4. Jalankan Aplikasi
     return runAppProcess(serial, port);
 }
 
