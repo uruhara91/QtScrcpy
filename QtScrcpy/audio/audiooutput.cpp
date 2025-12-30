@@ -174,6 +174,7 @@ bool AudioOutput::start(const QString& serial, int port) {
     // Izin: Microphone (RECORD_AUDIO)
     bool permGranted = runAdbCommand(serial, QStringList()
     << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.RECORD_AUDIO");
+    << "shell" << "appops" << "set" << APP_PACKAGE << "PROJECT_MEDIA" << "allow");
 
     if (permGranted) {
         qInfo() << "[Audio] Auto-grant RECORD_AUDIO permission success";
