@@ -6,8 +6,6 @@
 
 VideoSocket::VideoSocket(QObject *parent) : QTcpSocket(parent)
 {
-    setSocketOption(QAbstractSocket::LowDelayOption, 1);
-    setSocketOption(QAbstractSocket::KeepAliveOption, 1);
 }
 
 VideoSocket::~VideoSocket()
