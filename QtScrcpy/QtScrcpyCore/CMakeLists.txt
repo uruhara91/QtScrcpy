@@ -229,12 +229,12 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
 
-    # Cek library native hardware (WAJIB untuk Zero-Copy)
-    pkg_check_modules(LIBVA libva)
-    pkg_check_modules(LIBDRM libdrm)
-    pkg_check_modules(EGL egl)
+    # Cek library native hardware
+    pkg_check_modules(LIBVA REQUIRED libva libva-drm)
+    pkg_check_modules(LIBDRM REQUIRED libdrm)
+    pkg_check_modules(EGL REQUIRED egl)
 
-    # include path ffmpeg
+    # Include path
     target_include_directories(${QSC_PROJECT_NAME} PRIVATE 
         ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/include
         ${LIBVA_INCLUDE_DIRS}
@@ -242,12 +242,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         ${EGL_INCLUDE_DIRS}
     )
 
-    # link directory ffmpeg
-    set(FFMPEG_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/lib")
-    target_link_directories(${QSC_PROJECT_NAME} PUBLIC ${FFMPEG_LIB_PATH})
-
+    # Link libraries
     target_link_libraries(${QSC_PROJECT_NAME} PRIVATE
-        # Libraries native untuk Hardware Decode
         ${LIBVA_LIBRARIES}
         ${LIBDRM_LIBRARIES}
         ${EGL_LIBRARIES}
@@ -258,8 +254,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         avutil
         swscale
         avdevice
-        
-        # System libs
+        pthread
         z
     )
         add_custom_command(TARGET ${QSC_PROJECT_NAME} POST_BUILD
