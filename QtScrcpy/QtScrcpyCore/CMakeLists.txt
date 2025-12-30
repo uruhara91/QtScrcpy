@@ -233,6 +233,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     pkg_check_modules(LIBVA REQUIRED libva libva-drm)
     pkg_check_modules(LIBDRM REQUIRED libdrm)
     pkg_check_modules(EGL REQUIRED egl)
+    set(FFMPEG_STATIC_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/lib")
 
     # Include path
     target_include_directories(${QSC_PROJECT_NAME} PRIVATE 
@@ -245,10 +246,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Link libraries
     target_link_libraries(${QSC_PROJECT_NAME} PRIVATE
         # ffmpeg static
-        avformat
-        avcodec
-        avutil
-        swscale
+        ${FFMPEG_STATIC_LIB_DIR}/libavformat.a
+        ${FFMPEG_STATIC_LIB_DIR}/libavcodec.a
+        ${FFMPEG_STATIC_LIB_DIR}/libavutil.a
+        ${FFMPEG_STATIC_LIB_DIR}/libswscale.a
         pthread
         dl
         m
