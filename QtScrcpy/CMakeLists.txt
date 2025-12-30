@@ -368,11 +368,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     set(THREADS_PREFER_PTHREAD_FLAG ON)
     find_package(Threads REQUIRED)
+    find_package(mimalloc REQUIRED)
 
     target_link_libraries(${PROJECT_NAME} PRIVATE
         # xcb https://doc.qt.io/qt-5/linux-requirements.html
         xcb
-        # pthread
         Threads::Threads
     )
 
@@ -389,4 +389,5 @@ add_subdirectory(QtScrcpyCore)
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${LINK_LIBS}
     QtScrcpyCore
+    mimalloc
 )
