@@ -791,12 +791,17 @@ void Dialog::on_startAudioBtn_clicked()
         return;
     }
 
-    m_audioOutput.start(ui->serialBox->currentText(), 28200);
+    // Panggil Native C++ Start (Instant)
+    QString serial = ui->serialBox->currentText().trimmed();
+    m_audioOutput.start(serial, 28200);
+    
+    outLog("Starting audio forwarding...", true);
 }
 
 void Dialog::on_stopAudioBtn_clicked()
 {
     m_audioOutput.stop();
+    outLog("Audio forwarding stopped.", true);
 }
 
 void Dialog::on_installSndcpyBtn_clicked()
@@ -805,7 +810,19 @@ void Dialog::on_installSndcpyBtn_clicked()
         qWarning() << "No device is connected!";
         return;
     }
-    m_audioOutput.installonly(ui->serialBox->currentText(), 28200);
+    
+    QString serial = ui->serialBox->currentText().trimmed();
+    outLog("Installing soundservice...", true);
+    
+    bool success = m_audioOutput.install(serial, 28200);
+    
+    if (success) {
+        outLog("soundservice Installed & Configured Successfully!", true);
+        QMessageBox::information(this, "Success", "Audio Forwarder Installed!\nYou can now click 'Start Audio'.");
+    } else {
+        outLog("Installation Failed. Check connection or ADB.", true);
+        QMessageBox::critical(this, "Error", "Installation Failed.\nCheck if 'soundservice.apk' exists in the app folder.");
+    }
 }
 
 void Dialog::on_autoUpdatecheckBox_toggled(bool checked)

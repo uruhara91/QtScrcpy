@@ -1,277 +1,371 @@
 #include <QCoreApplication>
-#include <QOpenGLTexture>
-#include <QSurfaceFormat>
-
+#include <QDebug>
 #include "qyuvopenglwidget.h"
+#include "../../QtScrcpyCore/src/device/decoder/videobuffer.h"
 
-// 存储顶点坐标和纹理坐标
-// 存在一起缓存在vbo
-// 使用glVertexAttribPointer指定访问方式即可
+extern "C" {
+#include <libavutil/frame.h>
+#include <libavutil/hwcontext_drm.h>
+}
+
+#ifndef DRM_FORMAT_R8
+#define DRM_FORMAT_R8 fourcc_code('R', '8', ' ', ' ')
+#endif
+
+// Vertex data: XYZ position + UV coordinate
 static const GLfloat coordinate[] = {
-    // 顶点坐标，存储4个xyz坐标
-    // 坐标范围为[-1,1],中心点为 0,0
-    // 二维图像z始终为0
-    // GL_TRIANGLE_STRIP的绘制方式：
-    // 使用前3个坐标绘制一个三角形，使用后三个坐标绘制一个三角形，正好为一个矩形
-    // x     y     z
-    -1.0f,
-    -1.0f,
-    0.0f,
-    1.0f,
-    -1.0f,
-    0.0f,
-    -1.0f,
-    1.0f,
-    0.0f,
-    1.0f,
-    1.0f,
-    0.0f,
-
-    // 纹理坐标，存储4个xy坐标
-    // 坐标范围为[0,1],左下角为 0,0
-    0.0f,
-    1.0f,
-    1.0f,
-    1.0f,
-    0.0f,
-    0.0f,
-    1.0f,
-    0.0f
+    // X, Y, Z,           U, V
+    -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
+     1.0f, -1.0f, 0.0f,   1.0f, 1.0f,
+    -1.0f,  1.0f, 0.0f,   0.0f, 0.0f,
+     1.0f,  1.0f, 0.0f,   1.0f, 0.0f
 };
 
-// 顶点着色器
-static const QString s_vertShader = R"(
-    attribute vec3 vertexIn;    // xyz顶点坐标
-    attribute vec2 textureIn;   // xy纹理坐标
-    varying vec2 textureOut;    // 传递给片段着色器的纹理坐标
-    void main(void)
-    {
-        gl_Position = vec4(vertexIn, 1.0);  // 1.0表示vertexIn是一个顶点位置
-        textureOut = textureIn; // 纹理坐标直接传递给片段着色器
+// --- SHADER SOFTWARE (Optimized) ---
+static const char *vertShaderSW = R"(
+    attribute vec3 vertexIn;
+    attribute vec2 textureIn;
+    varying vec2 textureOut;
+    void main(void) {
+        gl_Position = vec4(vertexIn, 1.0);
+        textureOut = textureIn;
     }
 )";
 
-// 片段着色器
-static QString s_fragShader = R"(
-    varying vec2 textureOut;        // 由顶点着色器传递过来的纹理坐标
-    uniform sampler2D textureY;     // uniform 纹理单元，利用纹理单元可以使用多个纹理
-    uniform sampler2D textureU;     // sampler2D是2D采样器
-    uniform sampler2D textureV;     // 声明yuv三个纹理单元
-    void main(void)
-    {
+static const char *fragShaderSW = R"(
+    varying vec2 textureOut;
+    uniform sampler2D tex_y;
+    uniform sampler2D tex_u;
+    uniform sampler2D tex_v;
+    void main(void) {
         vec3 yuv;
         vec3 rgb;
-
-        // SDL2 BT709_SHADER_CONSTANTS
-        // https://github.com/spurious/SDL-mirror/blob/4ddd4c445aa059bb127e101b74a8c5b59257fbe2/src/render/opengl/SDL_shaders_gl.c#L102
-        const vec3 Rcoeff = vec3(1.1644,  0.000,  1.7927);
-        const vec3 Gcoeff = vec3(1.1644, -0.2132, -0.5329);
-        const vec3 Bcoeff = vec3(1.1644,  2.1124,  0.000);
-
-        // 根据指定的纹理textureY和坐标textureOut来采样
-        yuv.x = texture2D(textureY, textureOut).r;
-        yuv.y = texture2D(textureU, textureOut).r - 0.5;
-        yuv.z = texture2D(textureV, textureOut).r - 0.5;
-
-        // 采样完转为rgb
-        // 减少一些亮度
-        yuv.x = yuv.x - 0.0625;
-        rgb.r = dot(yuv, Rcoeff);
-        rgb.g = dot(yuv, Gcoeff);
-        rgb.b = dot(yuv, Bcoeff);
-        // 输出颜色值
+        yuv.x = texture2D(tex_y, textureOut).r;
+        yuv.y = texture2D(tex_u, textureOut).r - 0.5;
+        yuv.z = texture2D(tex_v, textureOut).r - 0.5;
+        // BT.601 conversion (Standard for SW decode)
+        rgb = mat3(1.0, 1.0, 1.0,
+                   0.0, -0.39465, 2.03211,
+                   1.13983, -0.58060, 0.0) * yuv;
         gl_FragColor = vec4(rgb, 1.0);
     }
 )";
 
-QYUVOpenGLWidget::QYUVOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent)
-{
-    /*
-    QSurfaceFormat format = QSurfaceFormat::defaultFormat();
-    format.setColorSpace(QSurfaceFormat::sRGBColorSpace);
-    format.setProfile(QSurfaceFormat::CompatibilityProfile);
-    format.setMajorVersion(3);
-    format.setMinorVersion(2);
-    QSurfaceFormat::setDefaultFormat(format);
-    */
-}
+// --- SHADER HARDWARE (VECTORIZED & OPTIMIZED) ---
+static const char *vertShaderHW = R"(
+    attribute vec3 vertexIn;
+    attribute vec2 textureIn;
+    varying vec2 textureOut;
+    void main(void) {
+        gl_Position = vec4(vertexIn, 1.0);
+        textureOut = textureIn;
+    }
+)";
 
-QYUVOpenGLWidget::~QYUVOpenGLWidget()
-{
+static const char *fragShaderHW = R"(
+    // Precision Hint: Good for mobile/embedded GPU performance
+    #ifdef GL_ES
+    precision mediump float;
+    #endif
+
+    varying vec2 textureOut;
+    uniform sampler2D tex_y;      // Y Plane (R8)
+    uniform sampler2D tex_uv_raw; // UV Plane (R8 Raw)
+    uniform float width;          // Texture Width
+
+    // Pre-calculated vectors for BT.709 (HDTV Standard)
+    const vec3 coeff_r = vec3(1.0, 0.0, 1.7927);
+    const vec3 coeff_g = vec3(1.0, -0.2132, -0.5329);
+    const vec3 coeff_b = vec3(1.0, 2.1124, 0.0);
+
+    void main(void) {
+        float y, u, v;
+
+        // 1. Fetch Y (Luminance)
+        y = texture2D(tex_y, textureOut).r;
+
+        // 2. Fetch UV (Chroma) with Pixel Center Sampling (Anti-Artifacts)
+        // Optimization: Simplify math for coordinate calculation
+        float texelSize = 1.0 / width;
+        float pixelPos = textureOut.x * width;
+        
+        // Logic: floor(pos / 2) * 2 + 0.5 -> Mencari tengah-tengah dari blok 2x2
+        float u_x = (floor(pixelPos * 0.5) * 2.0 + 0.5) * texelSize;
+        float v_x = u_x + texelSize; 
+        
+        // Reading UV (And centering it by subtracting 0.5)
+        u = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r - 0.5; 
+        v = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r - 0.5; 
+
+        // 3. COLOR CORRECTION: Limited Range Fix + BT.709
+        // Vectorized Math for GPU Efficiency
+        
+        // Expand Limited Range Y (16-235) to Full Range (0-255)
+        // Original Formula: y = 1.1643 * (y - 0.0627);
+        y = (y - 0.0627) * 1.1643;
+
+        vec3 yuv = vec3(y, u, v);
+        vec3 rgb;
+
+        // Dot Product is native GPU instruction (1 cycle usually)
+        rgb.r = dot(yuv, coeff_r);
+        rgb.g = dot(yuv, coeff_g);
+        rgb.b = dot(yuv, coeff_b);
+
+        gl_FragColor = vec4(rgb, 1.0);
+    }
+)";
+
+QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {}
+
+QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     makeCurrent();
-    m_vbo.destroy();
+    releaseHWFrame();
     deInitTextures();
+    m_vao.destroy(); // Destroy VAO
+    m_vbo.destroy();
     doneCurrent();
 }
 
-QSize QYUVOpenGLWidget::minimumSizeHint() const
-{
-    return QSize(50, 50);
-}
+QSize QYuvOpenGLWidget::minimumSizeHint() const { return QSize(50, 50); }
+QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize; }
 
-QSize QYUVOpenGLWidget::sizeHint() const
-{
-    return size();
-}
-
-void QYUVOpenGLWidget::setFrameSize(const QSize &frameSize)
-{
+void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
     if (m_frameSize != frameSize) {
         m_frameSize = frameSize;
-        m_needUpdate = true;
-        // inittexture immediately
-        repaint();
+        updateGeometry();
     }
 }
 
-const QSize &QYUVOpenGLWidget::frameSize()
-{
-    return m_frameSize;
-}
+const QSize &QYuvOpenGLWidget::frameSize() { return m_frameSize; }
+void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
 
-void QYUVOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV)
-{
-    if (m_textureInited) {
-        updateTexture(m_texture[0], 0, dataY, linesizeY);
-        updateTexture(m_texture[1], 1, dataU, linesizeU);
-        updateTexture(m_texture[2], 2, dataV, linesizeV);
-        update();
-    }
-}
-
-void QYUVOpenGLWidget::initializeGL()
-{
+void QYuvOpenGLWidget::initializeGL() {
     initializeOpenGLFunctions();
-    glDisable(GL_DEPTH_TEST);
 
-    // 顶点缓冲对象初始化
+    m_eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+    m_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+    m_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+
+    if (!m_eglCreateImageKHR || !m_eglDestroyImageKHR || !m_glEGLImageTargetTexture2DOES) {
+        qWarning() << "[HW] Critical: Failed to load EGL extensions!";
+    }
+
+    initShader();
+    initTextures();
+
+    // --- OPTIMIZATION: VAO SETUP ---
+    // Kita setup state OpenGL SEKALI saja di sini, bukan setiap frame.
+    m_vao.create();
+    m_vao.bind();
+
     m_vbo.create();
     m_vbo.bind();
     m_vbo.allocate(coordinate, sizeof(coordinate));
-    initShader();
-    // 设置背景清理色为黑色
-    glClearColor(0.0, 0.0, 0.0, 0.0);
-    // 清理颜色背景
-    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Define Attributes layout
+    // Karena input vertex & texture coord sama untuk HW dan SW shader,
+    // kita cukup setup pointer-nya sekali di VAO ini.
+    
+    // Vertex Pos (vec3) - Location 0/vertexIn
+    m_programHW.enableAttributeArray("vertexIn");
+    m_programHW.setAttributeBuffer("vertexIn", GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
+    
+    // Texture Coord (vec2) - Location 1/textureIn
+    m_programHW.enableAttributeArray("textureIn");
+    m_programHW.setAttributeBuffer("textureIn", GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
+
+    m_vbo.release();
+    m_vao.release();
+    // -------------------------------
+
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
-void QYUVOpenGLWidget::paintGL()
-{
-    m_shaderProgram.bind();
+void QYuvOpenGLWidget::initShader() {
+    // Compile shaders
+    if (!m_programSW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderSW))
+        qCritical() << "SW Vertex Shader Error:" << m_programSW.log();
+    if (!m_programSW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderSW))
+        qCritical() << "SW Frag Shader Error:" << m_programSW.log();
+    m_programSW.link();
 
-    if (m_needUpdate) {
-        deInitTextures();
-        initTextures();
-        m_needUpdate = false;
+    if (!m_programHW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderHW))
+        qCritical() << "HW Vertex Shader Error:" << m_programHW.log();
+    if (!m_programHW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderHW))
+        qCritical() << "HW Frag Shader Error:" << m_programHW.log();
+    m_programHW.link();
+}
+
+void QYuvOpenGLWidget::initTextures() {
+    glGenTextures(4, m_textures);
+    for (int i = 0; i < 4; i++) {
+        glBindTexture(GL_TEXTURE_2D, m_textures[i]);
+        // Linear sampling untuk visual lebih halus
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
-
-    if (m_textureInited) {
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, m_texture[0]);
-
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, m_texture[1]);
-
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, m_texture[2]);
-
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    }
-
-    m_shaderProgram.release();
 }
 
-void QYUVOpenGLWidget::resizeGL(int width, int height)
-{
-    glViewport(0, 0, width, height);
-    repaint();
-}
-
-void QYUVOpenGLWidget::initShader()
-{
-    // opengles的float、int等要手动指定精度
-    if (QCoreApplication::testAttribute(Qt::AA_UseOpenGLES)) {
-        s_fragShader.prepend(R"(
-                             precision mediump int;
-                             precision mediump float;
-                             )");
-    }
-    m_shaderProgram.addShaderFromSourceCode(QOpenGLShader::Vertex, s_vertShader);
-    m_shaderProgram.addShaderFromSourceCode(QOpenGLShader::Fragment, s_fragShader);
-    m_shaderProgram.link();
-    m_shaderProgram.bind();
-
-    // 指定顶点坐标在vbo中的访问方式
-    // 参数解释：顶点坐标在shader中的参数名称，顶点坐标为float，起始偏移为0，顶点坐标类型为vec3，步幅为3个float
-    m_shaderProgram.setAttributeBuffer("vertexIn", GL_FLOAT, 0, 3, 3 * sizeof(float));
-    // 启用顶点属性
-    m_shaderProgram.enableAttributeArray("vertexIn");
-
-    // 指定纹理坐标在vbo中的访问方式
-    // 参数解释：纹理坐标在shader中的参数名称，纹理坐标为float，起始偏移为12个float（跳过前面存储的12个顶点坐标），纹理坐标类型为vec2，步幅为2个float
-    m_shaderProgram.setAttributeBuffer("textureIn", GL_FLOAT, 12 * sizeof(float), 2, 2 * sizeof(float));
-    m_shaderProgram.enableAttributeArray("textureIn");
-
-    // 关联片段着色器中的纹理单元和opengl中的纹理单元（opengl一般提供16个纹理单元）
-    m_shaderProgram.setUniformValue("textureY", 0);
-    m_shaderProgram.setUniformValue("textureU", 1);
-    m_shaderProgram.setUniformValue("textureV", 2);
-}
-
-void QYUVOpenGLWidget::initTextures()
-{
-    // 创建纹理
-    glGenTextures(1, &m_texture[0]);
-    glBindTexture(GL_TEXTURE_2D, m_texture[0]);
-    // 设置纹理缩放时的策略
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // 设置st方向上纹理超出坐标时的显示策略
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, m_frameSize.width(), m_frameSize.height(), 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, nullptr);
-
-    glGenTextures(1, &m_texture[1]);
-    glBindTexture(GL_TEXTURE_2D, m_texture[1]);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, m_frameSize.width() / 2, m_frameSize.height() / 2, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, nullptr);
-
-    glGenTextures(1, &m_texture[2]);
-    glBindTexture(GL_TEXTURE_2D, m_texture[2]);
-    // 设置纹理缩放时的策略
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // 设置st方向上纹理超出坐标时的显示策略
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, m_frameSize.width() / 2, m_frameSize.height() / 2, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, nullptr);
-
-    m_textureInited = true;
-}
-
-void QYUVOpenGLWidget::deInitTextures()
-{
+void QYuvOpenGLWidget::deInitTextures() {
     if (QOpenGLFunctions::isInitialized(QOpenGLFunctions::d_ptr)) {
-        glDeleteTextures(3, m_texture);
+        glDeleteTextures(4, m_textures);
     }
-
-    memset(m_texture, 0, sizeof(m_texture));
-    m_textureInited = false;
 }
 
-void QYUVOpenGLWidget::updateTexture(GLuint texture, quint32 textureType, quint8 *pixels, quint32 stride)
-{
-    if (!pixels)
+void QYuvOpenGLWidget::resizeGL(int width, int height) {
+    glViewport(0, 0, width, height);
+}
+
+void QYuvOpenGLWidget::paintGL() {
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (!m_vb) return;
+
+    m_vb->lock();
+    const AVFrame *frame = m_vb->consumeRenderedFrame();
+    m_vb->unLock();
+
+    // --- OPTIMIZATION: BIND VAO ONCE ---
+    // Tidak perlu lagi enableAttributeArray & setAttributeBuffer setiap kali paint.
+    // Cukup bind VAO yang sudah merekam state itu.
+    QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
+
+    if (!frame && m_currentHWFrame) {
+        // Redraw last HW frame (e.g. resize window)
+        renderHardwareFrame(nullptr);
         return;
+    }
+    if (!frame) return;
 
-    QSize size = 0 == textureType ? m_frameSize : m_frameSize / 2;
+    if (frame->format == AV_PIX_FMT_DRM_PRIME) {
+        renderHardwareFrame(frame);
+    } else {
+        releaseHWFrame();
+        updateTextures(frame->data[0], frame->data[1], frame->data[2], 
+                       frame->linesize[0], frame->linesize[1], frame->linesize[2]);
+    }
+}
 
-    makeCurrent();
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(stride));
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, size.width(), size.height(), GL_LUMINANCE, GL_UNSIGNED_BYTE, pixels);
-    doneCurrent();
+void QYuvOpenGLWidget::releaseHWFrame() {
+    if (m_eglImageY != EGL_NO_IMAGE_KHR) {
+        m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageY);
+        m_eglImageY = EGL_NO_IMAGE_KHR;
+    }
+    if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
+        m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageUV);
+        m_eglImageUV = EGL_NO_IMAGE_KHR;
+    }
+    m_currentHWFrame = nullptr;
+}
+
+EGLImageKHR QYuvOpenGLWidget::createImageFromPlane(const AVDRMPlaneDescriptor &plane, int width, int height, const AVDRMObjectDescriptor &obj) {
+    EGLint attribs[50];
+    int i = 0;
+    attribs[i++] = EGL_WIDTH;
+    attribs[i++] = width;
+    attribs[i++] = EGL_HEIGHT;
+    attribs[i++] = height;
+    attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT;
+    attribs[i++] = DRM_FORMAT_R8; 
+    
+    attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
+    attribs[i++] = obj.fd;
+    attribs[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+    attribs[i++] = plane.offset;
+    attribs[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
+    attribs[i++] = plane.pitch;
+    
+    if (obj.format_modifier != DRM_FORMAT_MOD_INVALID) {
+        attribs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+        attribs[i++] = obj.format_modifier & 0xFFFFFFFF;
+        attribs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+        attribs[i++] = obj.format_modifier >> 32;
+    }
+    attribs[i++] = EGL_NONE;
+    
+    return m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
+}
+
+void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
+    if (frame) {
+        releaseHWFrame();
+        m_currentHWFrame = frame;
+
+        const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
+        if (!desc) return;
+
+        const AVDRMPlaneDescriptor *planeY = nullptr;
+        const AVDRMPlaneDescriptor *planeUV = nullptr;
+
+        // --- INTEL/AMD LOGIC KEPT INTACT (User Request) ---
+        // Ini logic sakral kamu, jangan diubah!
+        if (desc->nb_layers > 0) {
+            planeY = &desc->layers[0].planes[0];
+        }
+
+        if (desc->nb_layers > 1) {
+            planeUV = &desc->layers[1].planes[0]; // Intel Gen 11+ Style
+        } else if (desc->layers[0].nb_planes > 1) {
+            planeUV = &desc->layers[0].planes[1]; // AMD/Standard Style
+        }
+
+        if (planeY) {
+            const AVDRMObjectDescriptor &obj = desc->objects[planeY->object_index];
+            m_eglImageY = createImageFromPlane(*planeY, frame->width, frame->height, obj);
+        }
+
+        if (planeUV) {
+            const AVDRMObjectDescriptor &obj = desc->objects[planeUV->object_index];
+            m_eglImageUV = createImageFromPlane(*planeUV, frame->width, frame->height / 2, obj);
+        }
+    }
+
+    if (m_eglImageY == EGL_NO_IMAGE_KHR) return;
+
+    m_programHW.bind();
+    // Note: VAO is already bound in paintGL!
+
+    // Bind Texture Units
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_textures[0]);
+    m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageY);
+    m_programHW.setUniformValue("tex_y", 0);
+
+    if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, m_textures[1]);
+        m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageUV);
+        m_programHW.setUniformValue("tex_uv_raw", 1);
+    }
+
+    m_programHW.setUniformValue("width", (float)m_frameSize.width());
+
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    
+    m_programHW.release();
+}
+
+void QYuvOpenGLWidget::renderSoftwareFrame() {
+    // VAO sudah bound di paintGL, jadi attribute pointers sudah aman.
+    m_programSW.bind();
+    m_programSW.setUniformValue("tex_y", 0);
+    m_programSW.setUniformValue("tex_u", 1);
+    m_programSW.setUniformValue("tex_v", 2);
+}
+
+void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV) {
+    // Fungsi ini dipanggil hanya saat fallback Software
+    renderSoftwareFrame();
+    
+    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_textures[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeY, m_frameSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, dataY);
+    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_textures[1]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeU, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataU);
+    glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, m_textures[2]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeV, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataV);
+    
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    m_programSW.release();
 }

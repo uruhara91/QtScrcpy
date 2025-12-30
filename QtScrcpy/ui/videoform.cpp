@@ -19,11 +19,22 @@
 
 #include "config.h"
 #include "iconhelper.h"
-#include "qyuvopenglwidget.h"
+
+// --- FIX 1: Gunakan Relative Path untuk memastikan header yang benar terambil ---
+#include "../render/qyuvopenglwidget.h"
+// ------------------------------------------------------------------------------
+
 #include "toolform.h"
 #include "mousetap/mousetap.h"
 #include "ui_videoform.h"
 #include "videoform.h"
+
+// --- FIX 2: Include Core Headers untuk Zero Copy ---
+// Kita butuh ini untuk mengakses videoBuffer() dari Decoder
+#include "../QtScrcpyCore/src/device/device.h"
+#include "../QtScrcpyCore/src/device/decoder/decoder.h"
+#include "../QtScrcpyCore/src/device/decoder/videobuffer.h"
+// ---------------------------------------------------
 
 VideoForm::VideoForm(bool framelessWindow, bool skin, bool showToolbar, QWidget *parent) : QWidget(parent), ui(new Ui::videoForm), m_skin(skin)
 {
@@ -63,7 +74,9 @@ void VideoForm::initUI()
 #endif
     }
 
-    m_videoWidget = new QYUVOpenGLWidget();
+    // Karena header sudah benar (../render/qyuvopenglwidget.h),
+    // compiler sekarang harusnya tahu ukuran class ini.
+    m_videoWidget = new QYuvOpenGLWidget();
     m_videoWidget->hide();
     ui->keepRatioWidget->setWidget(m_videoWidget);
     ui->keepRatioWidget->setWidthHeightRatio(m_widthHeightRatio);
@@ -156,14 +169,49 @@ void VideoForm::updateRender(int width, int height, uint8_t* dataY, uint8_t* dat
         m_videoWidget->show();
     }
 
+    // Selalu update ukuran agar input koordinat mouse akurat!
     updateShowSize(QSize(width, height));
     m_videoWidget->setFrameSize(QSize(width, height));
-    m_videoWidget->updateTextures(dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
+
+    // --- LOGIKA BARU ---
+    if (dataY == nullptr) {
+        // Mode Hardware: Trigger repaint agar widget mengambil frame dari VideoBuffer sendiri
+        m_videoWidget->update(); 
+    } else {
+        // Mode Software: Upload texture manual
+        m_videoWidget->updateTextures(dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
+    }
+    // -------------------
 }
 
 void VideoForm::setSerial(const QString &serial)
 {
     m_serial = serial;
+
+    // --- LOGIKA ZERO COPY IMPLEMENTATION ---
+    // 1. Ambil device interface
+    auto deviceInterface = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!deviceInterface) {
+        return;
+    }
+
+    // 2. Cast ke implementasi Device (gunakan .data() untuk QPointer)
+    qsc::Device* deviceImpl = static_cast<qsc::Device*>(deviceInterface.data());
+
+    // 3. Sambungkan VideoBuffer ke Renderer
+    if (deviceImpl && deviceImpl->decoder()) {
+        VideoBuffer* vb = deviceImpl->decoder()->videoBuffer();
+        if (vb) {
+            // Kita gunakan m_videoWidget yang sudah diinisialisasi di initUI
+            m_videoWidget->setVideoBuffer(vb);
+            qInfo() << "[ZeroCopy] Success: VideoBuffer connected to Renderer for serial:" << serial;
+        } else {
+            qWarning() << "[ZeroCopy] Failed: VideoBuffer is NULL!";
+        }
+    } else {
+        qWarning() << "[ZeroCopy] Failed: Could not access internal decoder.";
+    }
+    // ---------------------------------------
 }
 
 void VideoForm::showToolForm(bool show)

@@ -227,21 +227,39 @@ endif()
 
 # Linux
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # include
-    target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/include)
-    # link
-    set(FFMPEG_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/lib")
-    target_link_directories(${QSC_PROJECT_NAME} PUBLIC ${FFMPEG_LIB_PATH})
-    target_link_libraries(${QSC_PROJECT_NAME} PRIVATE
-        # ffmpeg
-        avformat
-        avcodec
-        avutil
-        swscale
-        z
+    find_package(PkgConfig REQUIRED)
+
+    # Cek library native hardware
+    pkg_check_modules(LIBVA REQUIRED libva libva-drm)
+    pkg_check_modules(LIBDRM REQUIRED libdrm)
+    pkg_check_modules(EGL REQUIRED egl)
+    set(FFMPEG_STATIC_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/lib")
+
+    # Include path
+    target_include_directories(${QSC_PROJECT_NAME} PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/include
+        ${LIBVA_INCLUDE_DIRS}
+        ${LIBDRM_INCLUDE_DIRS}
+        ${EGL_INCLUDE_DIRS}
     )
 
-    add_custom_command(TARGET ${QSC_PROJECT_NAME} POST_BUILD
+    # Link libraries
+    target_link_libraries(${QSC_PROJECT_NAME} PRIVATE
+        # ffmpeg static
+        ${FFMPEG_STATIC_LIB_DIR}/libavformat.a
+        ${FFMPEG_STATIC_LIB_DIR}/libavcodec.a
+        ${FFMPEG_STATIC_LIB_DIR}/libavutil.a
+        ${FFMPEG_STATIC_LIB_DIR}/libswscale.a
+        pthread
+        dl
+        m
+        z
+
+        ${LIBVA_LIBRARIES}
+        ${LIBDRM_LIBRARIES}
+        ${EGL_LIBRARIES}
+    )
+        add_custom_command(TARGET ${QSC_PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/adb/linux/adb" "${QSC_DEPLOY_PATH}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/scrcpy-server" "${QSC_DEPLOY_PATH}"
     )
