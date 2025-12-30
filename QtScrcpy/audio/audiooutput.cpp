@@ -199,6 +199,7 @@ void AudioOutput::stop() {
 }
 
 bool AudioOutput::install(const QString& serial, int port) {
+    Q_UNUSED(port);
     // Cari lokasi APK (asumsi ada di folder yang sama dengan executable / sndcpy)
     QString appPath = qgetenv("QTSCRCPY_ADB_PATH"); // Fallback path logic
     QString apkPath = QCoreApplication::applicationDirPath() + "/sndcpy/" + APK_NAME;
