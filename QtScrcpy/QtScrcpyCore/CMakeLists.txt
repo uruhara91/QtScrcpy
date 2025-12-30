@@ -249,7 +249,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         avcodec
         avutil
         swscale
-        avdevice
         pthread
         dl
         m
