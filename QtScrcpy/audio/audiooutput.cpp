@@ -173,7 +173,7 @@ bool AudioOutput::start(const QString& serial, int port) {
     // B. AUTO GRANT PERMISSION (Agar tidak perlu klik Allow manual di HP)
     // Izin: Microphone (RECORD_AUDIO)
     bool permGranted = runAdbCommand(serial, QStringList()
-    << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.RECORD_AUDIO");
+    << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.RECORD_AUDIO";
     << "shell" << "appops" << "set" << APP_PACKAGE << "PROJECT_MEDIA" << "allow");
 
     if (permGranted) {
