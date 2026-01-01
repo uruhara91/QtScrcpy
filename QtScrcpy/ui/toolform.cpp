@@ -12,6 +12,7 @@
 ToolForm::ToolForm(QWidget *adsorbWidget, AdsorbPositions adsorbPos) : MagneticWidget(adsorbWidget, adsorbPos), ui(new Ui::ToolForm)
 {
     ui->setupUi(this);
+    this->setStyleSheet("background-color: black;");
     setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
     //setWindowFlags(windowFlags() & ~Qt::WindowMinMaxButtonsHint);
 
