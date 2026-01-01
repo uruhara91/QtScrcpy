@@ -7,7 +7,6 @@
 #include <QTime>
 
 #include "../../include/QtScrcpyCore.h"
-// Pastikan include Decoder ada agar compiler tahu return typenya
 #include "decoder/decoder.h"
 
 class QMouseEvent;
@@ -31,10 +30,7 @@ public:
     explicit Device(DeviceParams params, QObject *parent = nullptr);
     virtual ~Device();
 
-    // --- NEW: Getter untuk Zero Copy ---
-    // Memberikan akses ke Decoder internal
     Decoder* decoder() const { return m_decoder; }
-    // -----------------------------------
 
     void setUserData(void* data) override;
     void* getUserData() override;
@@ -96,7 +92,6 @@ private:
     QElapsedTimer m_startTimeCount;
     DeviceParams m_params;
     
-    // FIX: Mengganti nama variable agar sesuai dengan device.cpp
     std::set<DeviceObserver*> m_deviceObservers; 
     
     void* m_userData = nullptr;
