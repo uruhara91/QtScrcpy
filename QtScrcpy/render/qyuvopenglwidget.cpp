@@ -74,7 +74,7 @@ static const char *fragShaderHW = R"(
     uniform sampler2D tex_uv_raw; // UV Plane (R8 Raw)
     uniform float width;          // Texture Width
 
-    // Pre-calculated vectors for BT.709 (HDTV Standard)
+    // Pre-calculated vectors for BT.709
     const vec3 coeff_r = vec3(1.0, 0.0, 1.7927);
     const vec3 coeff_g = vec3(1.0, -0.2132, -0.5329);
     const vec3 coeff_b = vec3(1.0, 2.1124, 0.0);
@@ -85,30 +85,25 @@ static const char *fragShaderHW = R"(
         // 1. Fetch Y (Luminance)
         y = texture2D(tex_y, textureOut).r;
 
-        // 2. Fetch UV (Chroma) with Pixel Center Sampling (Anti-Artifacts)
-        // Optimization: Simplify math for coordinate calculation
+        // 2. Fetch UV (Chroma) with Pixel Center Sampling
         float texelSize = 1.0 / width;
         float pixelPos = textureOut.x * width;
         
-        // Logic: floor(pos / 2) * 2 + 0.5 -> Mencari tengah-tengah dari blok 2x2
+        // Logic: floor
         float u_x = (floor(pixelPos * 0.5) * 2.0 + 0.5) * texelSize;
         float v_x = u_x + texelSize; 
         
-        // Reading UV (And centering it by subtracting 0.5)
+        // Reading UV
         u = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r - 0.5; 
         v = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r - 0.5; 
 
-        // 3. COLOR CORRECTION: Limited Range Fix + BT.709
-        // Vectorized Math for GPU Efficiency
-        
-        // Expand Limited Range Y (16-235) to Full Range (0-255)
-        // Original Formula: y = 1.1643 * (y - 0.0627);
+        // 3. COLOR CORRECTION
         y = (y - 0.0627) * 1.1643;
 
         vec3 yuv = vec3(y, u, v);
         vec3 rgb;
 
-        // Dot Product is native GPU instruction (1 cycle usually)
+        // Dot Product is native GPU instruction
         rgb.r = dot(yuv, coeff_r);
         rgb.g = dot(yuv, coeff_g);
         rgb.b = dot(yuv, coeff_b);
@@ -271,14 +266,13 @@ EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, i
     }
 
     // 2. LRU
-    while (m_eglImageCache.size() >= 5) {
+    while (m_eglImageCache.size() >= 7) {
         if (m_cacheRecentUse.isEmpty()) break;
         
-        // Ambil key yang paling jarang dipake (paling depan)
+        // Ambil key
         QPair<int, int> oldKey = m_cacheRecentUse.takeFirst();
         
         if (m_eglImageCache.contains(oldKey)) {
-            // Destroy Image biar Buffer-nya balik ke Pool FFmpeg
             m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageCache[oldKey].image);
             m_eglImageCache.remove(oldKey);
         }
