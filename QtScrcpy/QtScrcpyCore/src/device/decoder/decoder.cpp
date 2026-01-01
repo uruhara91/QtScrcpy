@@ -78,6 +78,8 @@ bool Decoder::open()
     m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
     m_codecCtx->thread_type = FF_THREAD_SLICE;
 
+    m_codecCtx->extra_hw_frames = 10;
+
     if (!initHWDecoder(codec)) {
         qWarning("VAAPI init failed, falling back to software decoding.");
     }
@@ -127,11 +129,11 @@ bool Decoder::push(const AVPacket *packet)
                  return false;
             }
 
-            mappedFrame->format = AV_PIX_FMT_DRM_PRIME;
-            int mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ);
+            int mapRet = av_hwframe_map(mappedFrame, decodingFrame, 
+                                        AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_DIRECT);
 
             if (mapRet < 0) {
-                mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_WRITE);
+                mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ);
             }
 
             if (mapRet == 0) {
