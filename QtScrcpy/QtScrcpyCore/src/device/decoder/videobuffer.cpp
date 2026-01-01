@@ -71,19 +71,30 @@ AVFrame *VideoBuffer::decodingFrame()
 void VideoBuffer::offerDecodedFrame(bool &previousFrameSkipped)
 {
     m_mutex.lock();
-
-    if (m_renderExpiredFrames) {
+    
+    // Blocking wait for the previous rendering frame to be consumed
+    /* if (m_renderExpiredFrames) {
         while (!m_renderingFrameConsumed && !m_interrupted) {
             m_renderingFrameConsumedCond.wait(&m_mutex);
         }
     } else {
-        if (m_fpsCounter.isStarted() && !m_renderingFrameConsumed) {
+         if (m_fpsCounter.isStarted() && !m_renderingFrameConsumed) {
             m_fpsCounter.addSkippedFrame();
         }
     }
+    */
+   
+    if (!m_renderingFrameConsumed) {
+         previousFrameSkipped = true;
+         if (m_fpsCounter.isStarted()) {
+            m_fpsCounter.addSkippedFrame();
+         }
+    } else {
+         previousFrameSkipped = false;
+    }
 
     swap();
-    previousFrameSkipped = !m_renderingFrameConsumed;
+    
     m_renderingFrameConsumed = false;
     m_mutex.unlock();
 }

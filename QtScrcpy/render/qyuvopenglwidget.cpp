@@ -2,6 +2,7 @@
 #include <QDebug>
 #include "qyuvopenglwidget.h"
 #include "../../QtScrcpyCore/src/device/decoder/videobuffer.h"
+#include <QSurfaceFormat>
 
 extern "C" {
 #include <libavutil/frame.h>
@@ -151,6 +152,10 @@ void QYuvOpenGLWidget::initializeGL() {
         qWarning() << "[HW] Critical: Failed to load EGL extensions!";
     }
 
+    QSurfaceFormat format = this->format();
+    format.setSwapInterval(0); 
+    context()->setFormat(format);
+
     initShader();
     initTextures();
 
@@ -172,7 +177,6 @@ void QYuvOpenGLWidget::initializeGL() {
 
     m_vbo.release();
     m_vao.release();
-    // -------------------------------
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
