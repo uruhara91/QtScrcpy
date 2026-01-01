@@ -84,9 +84,9 @@ bool Decoder::open()
     m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
     m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
     m_codecCtx->skip_loop_filter = AVDISCARD_NONREF;
-    //  m_codecCtx->extra_hw_frames = 1;
     m_codecCtx->thread_type = FF_THREAD_SLICE;
     m_codecCtx->thread_count = 1;
+    m_codecCtx->extra_hw_frames = 1;
     m_codecCtx->delay = 0;
 
     if (!initHWDecoder(codec)) {
