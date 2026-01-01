@@ -83,7 +83,7 @@ bool Decoder::open()
 
 //  m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
 //  m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
-    m_codecCtx->extra_hw_frames = 2;
+    m_codecCtx->extra_hw_frames = 3;
 //  m_codecCtx->thread_type = FF_THREAD_SLICE;
 //  m_codecCtx->thread_count = 2;
 
