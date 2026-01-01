@@ -266,7 +266,7 @@ EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, i
     }
 
     // 2. LRU
-    while (m_eglImageCache.size() >= 4) {
+    while (m_eglImageCache.size() >= 3) {
         if (m_cacheRecentUse.isEmpty()) break;
         // Ambil key
         QPair<int, int> oldKey = m_cacheRecentUse.takeFirst();
