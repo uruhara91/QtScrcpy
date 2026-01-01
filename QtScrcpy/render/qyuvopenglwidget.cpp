@@ -368,7 +368,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     
     m_programHW.release();
 
-    glFinish();
+    // glFinish();
 }
 
 void QYuvOpenGLWidget::renderSoftwareFrame() {
