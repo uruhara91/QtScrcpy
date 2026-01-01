@@ -266,7 +266,7 @@ EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, i
     }
 
     // 2. LRU
-    while (m_eglImageCache.size() >= 10) {
+    while (m_eglImageCache.size() >= 1) {
         if (m_cacheRecentUse.isEmpty()) break;
         
         // Ambil key
@@ -309,7 +309,6 @@ EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, i
 
 void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (frame) {
-        
         static int lastW = 0, lastH = 0;
         if (frame->width != lastW || frame->height != lastH) {
             flushEGLCache();
@@ -323,15 +322,9 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         const AVDRMPlaneDescriptor *planeY = nullptr;
         const AVDRMPlaneDescriptor *planeUV = nullptr;
 
-        if (desc->nb_layers > 0) {
-            planeY = &desc->layers[0].planes[0];
-        }
-
-        if (desc->nb_layers > 1) {
-            planeUV = &desc->layers[1].planes[0];
-        } else if (desc->layers[0].nb_planes > 1) {
-            planeUV = &desc->layers[0].planes[1];
-        }
+        if (desc->nb_layers > 0) planeY = &desc->layers[0].planes[0];
+        if (desc->nb_layers > 1) planeUV = &desc->layers[1].planes[0];
+        else if (desc->layers[0].nb_planes > 1) planeUV = &desc->layers[0].planes[1];
 
         if (planeY) {
             const AVDRMObjectDescriptor &obj = desc->objects[planeY->object_index];
@@ -349,29 +342,25 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (m_eglImageY == EGL_NO_IMAGE_KHR) return;
 
     m_programHW.bind();
-
-    // Bind Texture Units
-    static int frameCounter = 0;
-    int baseTexIdx = (frameCounter % 2) * 2;
-    frameCounter++;
-
-    // Bind Texture Y (Index 0 / 2)
+    
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_textures[baseTexIdx]); 
+    glBindTexture(GL_TEXTURE_2D, m_textures[0]); 
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageY);
     m_programHW.setUniformValue("tex_y", 0);
 
-    // Bind Texture UV (Index 1 / 3)
     if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, m_textures[baseTexIdx + 1]); 
+        glBindTexture(GL_TEXTURE_2D, m_textures[1]); 
         m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageUV);
         m_programHW.setUniformValue("tex_uv_raw", 1);
     }
 
     m_programHW.setUniformValue("width", (float)m_frameSize.width());
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    
     m_programHW.release();
+
+    glFinish(); 
 }
 
 void QYuvOpenGLWidget::renderSoftwareFrame() {
