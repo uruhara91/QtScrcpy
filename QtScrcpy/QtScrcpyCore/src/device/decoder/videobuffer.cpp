@@ -70,33 +70,20 @@ AVFrame *VideoBuffer::decodingFrame()
 
 void VideoBuffer::offerDecodedFrame(bool &previousFrameSkipped)
 {
-    m_mutex.lock();
+    QMutexLocker lock(&m_mutex);
     
-    // Blocking wait for the previous rendering frame to be consumed
-    /* if (m_renderExpiredFrames) {
-        while (!m_renderingFrameConsumed && !m_interrupted) {
-            m_renderingFrameConsumedCond.wait(&m_mutex);
-        }
-    } else {
-         if (m_fpsCounter.isStarted() && !m_renderingFrameConsumed) {
-            m_fpsCounter.addSkippedFrame();
-        }
-    }
-    */
-   
     if (!m_renderingFrameConsumed) {
-         previousFrameSkipped = true;
-         if (m_fpsCounter.isStarted()) {
+        previousFrameSkipped = true;
+        if (m_fpsCounter.isStarted()) {
             m_fpsCounter.addSkippedFrame();
-         }
+        }
+        av_frame_unref(m_renderingframe);
     } else {
-         previousFrameSkipped = false;
+        previousFrameSkipped = false;
     }
 
     swap();
-    
     m_renderingFrameConsumed = false;
-    m_mutex.unlock();
 }
 
 void VideoBuffer::peekFrameInfo(int &width, int &height, int &format)

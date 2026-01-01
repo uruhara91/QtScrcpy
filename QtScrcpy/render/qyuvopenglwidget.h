@@ -7,10 +7,14 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 #include <QMutex>
+#include <QMap>
+#include <QPair>
+#include <QList>
 
-// --- EGL & DRM Dependencies ---
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h> 
 #include <libdrm/drm_fourcc.h>
 
 // Forward Declaration
@@ -56,9 +60,7 @@ private:
     void renderHardwareFrame(const AVFrame *frame);
 
     // Helper cleanup
-    void releaseHWFrame();
-
-    EGLImageKHR createImageFromPlane(const AVDRMPlaneDescriptor &plane, int width, int height, const AVDRMObjectDescriptor &obj);
+    // void releaseHWFrame();
 
 private:
     QSize m_frameSize = { -1, -1 };
@@ -70,9 +72,13 @@ private:
     QOpenGLShaderProgram m_programSW;
     QOpenGLShaderProgram m_programHW;
 
-    // index 0-2: Y, U, V textures (SW)
-    // HW Mode will reuse index 0 (Y) and 1 (UV)
+    // SW index 0-2: Y, U, V
+    // HW index 0 (Y) and 1 (UV)
     GLuint m_textures[4] = {0, 0, 0, 0};
+
+    PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
+    PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;
+    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES = nullptr;
 
     // --- EGL Zero-Copy Resources ---
     EGLImageKHR m_eglImageY = EGL_NO_IMAGE_KHR;
@@ -80,10 +86,19 @@ private:
     
     const AVFrame *m_currentHWFrame = nullptr;
 
-    // --- Function Pointers ---
-    PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
-    PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;
-    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES = nullptr;
+    // EGL Image Cache Structure
+    struct EGLImageCacheEntry {
+        EGLImageKHR image;
+        int width;
+        int height;
+    };
+    
+    QMap<QPair<int, int>, EGLImageCacheEntry> m_eglImageCache;
+    
+    QList<QPair<int, int>> m_cacheRecentUse; 
+
+    void flushEGLCache(); 
+    EGLImageKHR getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier);
 };
 
 #endif // QYUVOPENGLWIDGET_H

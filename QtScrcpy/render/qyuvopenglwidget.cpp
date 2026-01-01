@@ -64,55 +64,37 @@ static const char *vertShaderHW = R"(
 )";
 
 static const char *fragShaderHW = R"(
-    // Precision Hint: Good for mobile/embedded GPU performance
     #ifdef GL_ES
     precision mediump float;
     #endif
 
     varying vec2 textureOut;
-    uniform sampler2D tex_y;      // Y Plane (R8)
-    uniform sampler2D tex_uv_raw; // UV Plane (R8 Raw)
-    uniform float width;          // Texture Width
+    uniform sampler2D tex_y;
+    uniform sampler2D tex_uv_raw;
+    uniform float width;
 
-    // Pre-calculated vectors for BT.709 (HDTV Standard)
-    const vec3 coeff_r = vec3(1.0, 0.0, 1.7927);
-    const vec3 coeff_g = vec3(1.0, -0.2132, -0.5329);
-    const vec3 coeff_b = vec3(1.0, 2.1124, 0.0);
+    // BT.601 coefficients
+    const vec3 offset = vec3(0.0627, 0.5, 0.5);
+    const mat3 yuv2rgb = mat3(
+        1.164,  1.164,  1.164,
+        0.000, -0.392,  2.017,
+        1.596, -0.813,  0.000
+    );
 
     void main(void) {
-        float y, u, v;
-
-        // 1. Fetch Y (Luminance)
-        y = texture2D(tex_y, textureOut).r;
-
-        // 2. Fetch UV (Chroma) with Pixel Center Sampling (Anti-Artifacts)
-        // Optimization: Simplify math for coordinate calculation
+        // Sample Y
+        float y = texture2D(tex_y, textureOut).r - offset.x;
+        
+        // Sample UV
         float texelSize = 1.0 / width;
-        float pixelPos = textureOut.x * width;
+        float u_x = (floor(textureOut.x * width * 0.5) * 2.0 + 0.5) * texelSize;
+        float v_x = u_x + texelSize;
         
-        // Logic: floor(pos / 2) * 2 + 0.5 -> Mencari tengah-tengah dari blok 2x2
-        float u_x = (floor(pixelPos * 0.5) * 2.0 + 0.5) * texelSize;
-        float v_x = u_x + texelSize; 
+        float u = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r - offset.y;
+        float v = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r - offset.z;
         
-        // Reading UV (And centering it by subtracting 0.5)
-        u = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r - 0.5; 
-        v = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r - 0.5; 
-
-        // 3. COLOR CORRECTION: Limited Range Fix + BT.709
-        // Vectorized Math for GPU Efficiency
-        
-        // Expand Limited Range Y (16-235) to Full Range (0-255)
-        // Original Formula: y = 1.1643 * (y - 0.0627);
-        y = (y - 0.0627) * 1.1643;
-
-        vec3 yuv = vec3(y, u, v);
-        vec3 rgb;
-
-        // Dot Product is native GPU instruction (1 cycle usually)
-        rgb.r = dot(yuv, coeff_r);
-        rgb.g = dot(yuv, coeff_g);
-        rgb.b = dot(yuv, coeff_b);
-
+        // Matrix multiply
+        vec3 rgb = yuv2rgb * vec3(y, u, v);
         gl_FragColor = vec4(rgb, 1.0);
     }
 )";
@@ -121,7 +103,8 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {}
 
 QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     makeCurrent();
-    releaseHWFrame();
+    
+    flushEGLCache(); 
     deInitTextures();
     m_vao.destroy();
     m_vbo.destroy();
@@ -228,65 +211,97 @@ void QYuvOpenGLWidget::paintGL() {
     // --- BIND VAO ---
     QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
 
-    if (!frame && m_currentHWFrame) {
-        renderHardwareFrame(nullptr);
-        return;
-    }
     if (!frame) return;
 
     if (frame->format == AV_PIX_FMT_DRM_PRIME) {
         renderHardwareFrame(frame);
     } else {
-        releaseHWFrame();
+        
         updateTextures(frame->data[0], frame->data[1], frame->data[2], 
                        frame->linesize[0], frame->linesize[1], frame->linesize[2]);
     }
 }
 
-void QYuvOpenGLWidget::releaseHWFrame() {
-    if (m_eglImageY != EGL_NO_IMAGE_KHR) {
-        m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageY);
-        m_eglImageY = EGL_NO_IMAGE_KHR;
+void QYuvOpenGLWidget::flushEGLCache() {
+    if (!m_eglDestroyImageKHR) return;
+
+    auto it = m_eglImageCache.begin();
+    while (it != m_eglImageCache.end()) {
+        m_eglDestroyImageKHR(eglGetCurrentDisplay(), it.value().image);
+        ++it;
     }
-    if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
-        m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageUV);
-        m_eglImageUV = EGL_NO_IMAGE_KHR;
-    }
-    m_currentHWFrame = nullptr;
+    m_eglImageCache.clear();
+    m_cacheRecentUse.clear();
 }
 
-EGLImageKHR QYuvOpenGLWidget::createImageFromPlane(const AVDRMPlaneDescriptor &plane, int width, int height, const AVDRMObjectDescriptor &obj) {
+EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier) {
+    QPair<int, int> key = qMakePair(fd, offset);
+
+    // 1. Cek Cache
+    if (m_eglImageCache.contains(key)) {
+        m_cacheRecentUse.removeOne(key); 
+        m_cacheRecentUse.append(key);
+        
+        EGLImageCacheEntry entry = m_eglImageCache[key];
+        if (entry.width == width && entry.height == height) {
+            return entry.image;
+        } else {
+            m_eglDestroyImageKHR(eglGetCurrentDisplay(), entry.image);
+            m_eglImageCache.remove(key);
+            m_cacheRecentUse.removeOne(key);
+        }
+    }
+
+    // 2. LRU
+    while (m_eglImageCache.size() >= 2) {
+        if (m_cacheRecentUse.isEmpty()) break;
+        // Ambil key
+        QPair<int, int> oldKey = m_cacheRecentUse.takeFirst();
+        
+        if (m_eglImageCache.contains(oldKey)) {
+            m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageCache[oldKey].image);
+            m_eglImageCache.remove(oldKey);
+        }
+    }
+
+    // 3. Create
     EGLint attribs[50];
     int i = 0;
-    attribs[i++] = EGL_WIDTH;
-    attribs[i++] = width;
-    attribs[i++] = EGL_HEIGHT;
-    attribs[i++] = height;
-    attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-    attribs[i++] = DRM_FORMAT_R8; 
+    attribs[i++] = EGL_WIDTH; attribs[i++] = width;
+    attribs[i++] = EGL_HEIGHT; attribs[i++] = height;
+    attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT; attribs[i++] = DRM_FORMAT_R8;
+    attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT; attribs[i++] = fd;
+    attribs[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT; attribs[i++] = offset;
+    attribs[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT; attribs[i++] = pitch;
     
-    attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-    attribs[i++] = obj.fd;
-    attribs[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-    attribs[i++] = plane.offset;
-    attribs[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-    attribs[i++] = plane.pitch;
-    
-    if (obj.format_modifier != DRM_FORMAT_MOD_INVALID) {
+    if (modifier != DRM_FORMAT_MOD_INVALID) {
         attribs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
-        attribs[i++] = obj.format_modifier & 0xFFFFFFFF;
+        attribs[i++] = modifier & 0xFFFFFFFF;
         attribs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
-        attribs[i++] = obj.format_modifier >> 32;
+        attribs[i++] = modifier >> 32;
     }
     attribs[i++] = EGL_NONE;
-    
-    return m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
+
+    EGLImageKHR img = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
+
+    // 4. Caching
+    if (img != EGL_NO_IMAGE_KHR) {
+        m_eglImageCache.insert(key, {img, width, height});
+        m_cacheRecentUse.append(key);
+    }
+
+    return img;
 }
 
 void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (frame) {
-        releaseHWFrame();
-        m_currentHWFrame = frame;
+        
+        static int lastW = 0, lastH = 0;
+        if (frame->width != lastW || frame->height != lastH) {
+            flushEGLCache();
+            lastW = frame->width;
+            lastH = frame->height;
+        }
 
         const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
         if (!desc) return;
@@ -306,12 +321,14 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
 
         if (planeY) {
             const AVDRMObjectDescriptor &obj = desc->objects[planeY->object_index];
-            m_eglImageY = createImageFromPlane(*planeY, frame->width, frame->height, obj);
+            m_eglImageY = getCachedEGLImage(obj.fd, planeY->offset, planeY->pitch, 
+                                            frame->width, frame->height, obj.format_modifier);
         }
 
         if (planeUV) {
             const AVDRMObjectDescriptor &obj = desc->objects[planeUV->object_index];
-            m_eglImageUV = createImageFromPlane(*planeUV, frame->width, frame->height / 2, obj);
+            m_eglImageUV = getCachedEGLImage(obj.fd, planeUV->offset, planeUV->pitch, 
+                                             frame->width, frame->height / 2, obj.format_modifier);
         }
     }
 
@@ -337,6 +354,8 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     
     m_programHW.release();
+
+    // glFinish();
 }
 
 void QYuvOpenGLWidget::renderSoftwareFrame() {

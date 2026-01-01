@@ -27,6 +27,8 @@ Decoder::Decoder(std::function<void(int, int, uint8_t*, uint8_t*, uint8_t*, int,
     m_vb->init();
     connect(this, &Decoder::newFrame, this, &Decoder::onNewFrame, Qt::QueuedConnection);
     connect(m_vb, &VideoBuffer::updateFPS, this, &Decoder::updateFPS);
+
+    m_tempFrame = av_frame_alloc();
 }
 
 Decoder::~Decoder() {
@@ -35,6 +37,11 @@ Decoder::~Decoder() {
         m_vb->deInit();
         delete m_vb;
         m_vb = Q_NULLPTR;
+    }
+
+        if (m_tempFrame) {
+        av_frame_free(&m_tempFrame);
+        m_tempFrame = nullptr;
     }
 }
 
@@ -76,7 +83,11 @@ bool Decoder::open()
 
     m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
     m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
+    m_codecCtx->skip_loop_filter = AVDISCARD_NONREF;
     m_codecCtx->thread_type = FF_THREAD_SLICE;
+    m_codecCtx->thread_count = 1;
+    m_codecCtx->extra_hw_frames = 1;
+    m_codecCtx->delay = 0;
 
     if (!initHWDecoder(codec)) {
         qWarning("VAAPI init failed, falling back to software decoding.");
@@ -121,34 +132,33 @@ bool Decoder::push(const AVPacket *packet)
     ret = avcodec_receive_frame(m_codecCtx, decodingFrame);
     if (ret == 0) {
         if (decodingFrame->format == AV_PIX_FMT_VAAPI) {
-            AVFrame *mappedFrame = av_frame_alloc();
-            if (!mappedFrame) {
-                 qCritical("Failed to allocate mapped frame");
-                 return false;
-            }
 
-            mappedFrame->format = AV_PIX_FMT_DRM_PRIME;
-            int mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ);
+            // 1. Reset
+            av_frame_unref(m_tempFrame);
 
+            // 2. Set format
+            m_tempFrame->format = AV_PIX_FMT_DRM_PRIME;
+
+            // 3. Mapping (Zero Copy Magic)
+            int mapRet = av_hwframe_map(m_tempFrame, decodingFrame, AV_HWFRAME_MAP_READ);
             if (mapRet < 0) {
-                mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_WRITE);
+                mapRet = av_hwframe_map(m_tempFrame, decodingFrame, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_WRITE);
             }
 
             if (mapRet == 0) {
-                mappedFrame->pts = decodingFrame->pts;
-                mappedFrame->pkt_dts = decodingFrame->pkt_dts;
-                mappedFrame->width = decodingFrame->width;
-                mappedFrame->height = decodingFrame->height;
+                m_tempFrame->pts = decodingFrame->pts;
+                m_tempFrame->pkt_dts = decodingFrame->pkt_dts;
+                m_tempFrame->width = decodingFrame->width;
+                m_tempFrame->height = decodingFrame->height;
 
+                // 4. SWAP FRAME
                 av_frame_unref(decodingFrame);
-                av_frame_move_ref(decodingFrame, mappedFrame);
-                av_frame_free(&mappedFrame);
+                av_frame_move_ref(decodingFrame, m_tempFrame);
+
             } else {
-                qWarning("Failed to map VAAPI frame to DRM_PRIME: %d. Rendering might fail.", mapRet);
-                av_frame_free(&mappedFrame);
+                qWarning("Failed to map VAAPI frame: %d", mapRet);
             }
         }
-
         pushFrame();
     } else if (ret != AVERROR(EAGAIN)) {
         return false;

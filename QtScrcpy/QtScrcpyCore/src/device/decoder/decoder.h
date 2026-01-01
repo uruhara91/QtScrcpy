@@ -43,6 +43,8 @@ private:
     
     bool m_isCodecCtxOpen = false;
     std::function<void(int, int, uint8_t*, uint8_t*, uint8_t*, int, int, int)> m_onFrame = Q_NULLPTR;
+
+    AVFrame *m_tempFrame = nullptr;
 };
 
 #endif // DECODER_H

@@ -161,26 +161,21 @@ void VideoForm::updateRender(int width, int height, uint8_t* dataY, uint8_t* dat
         m_videoWidget->show();
     }
 
-    // Selalu update ukuran agar input koordinat mouse akurat!
     updateShowSize(QSize(width, height));
     m_videoWidget->setFrameSize(QSize(width, height));
 
-    // --- LOGIKA BARU ---
     if (dataY == nullptr) {
-        // Mode Hardware: Trigger repaint agar widget mengambil frame dari VideoBuffer sendiri
         m_videoWidget->update(); 
     } else {
-        // Mode Software: Upload texture manual
         m_videoWidget->updateTextures(dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
     }
-    // -------------------
 }
 
 void VideoForm::setSerial(const QString &serial)
 {
     m_serial = serial;
 
-    // --- LOGIKA ZERO COPY IMPLEMENTATION ---
+    // --- LOGIKA ZERO COPY ---
     // 1. Ambil device interface
     auto deviceInterface = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (!deviceInterface) {
