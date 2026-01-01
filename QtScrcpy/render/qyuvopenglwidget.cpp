@@ -266,9 +266,8 @@ EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, i
     }
 
     // 2. LRU
-    while (m_eglImageCache.size() >= 7) {
+    while (m_eglImageCache.size() >= 2) {
         if (m_cacheRecentUse.isEmpty()) break;
-        
         // Ambil key
         QPair<int, int> oldKey = m_cacheRecentUse.takeFirst();
         
@@ -368,6 +367,8 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     
     m_programHW.release();
+
+    glFinish();
 }
 
 void QYuvOpenGLWidget::renderSoftwareFrame() {
