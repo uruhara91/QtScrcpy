@@ -23,9 +23,7 @@ public:
     bool push(const AVPacket *packet);
     void peekFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame);
 
-    // --- NEW: Getter untuk Zero Copy ---
     VideoBuffer* videoBuffer() const { return m_vb; }
-    // -----------------------------------
 
 signals:
     void updateFPS(quint32 fps);

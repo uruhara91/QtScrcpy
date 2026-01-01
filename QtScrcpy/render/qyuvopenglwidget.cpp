@@ -12,7 +12,7 @@ extern "C" {
 #define DRM_FORMAT_R8 fourcc_code('R', '8', ' ', ' ')
 #endif
 
-// Vertex data: XYZ position + UV coordinate
+// Vertex data
 static const GLfloat coordinate[] = {
     // X, Y, Z,           U, V
     -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
@@ -21,7 +21,7 @@ static const GLfloat coordinate[] = {
      1.0f,  1.0f, 0.0f,   1.0f, 0.0f
 };
 
-// --- SHADER SOFTWARE (Optimized) ---
+// --- SHADER SOFTWARE ---
 static const char *vertShaderSW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -51,7 +51,7 @@ static const char *fragShaderSW = R"(
     }
 )";
 
-// --- SHADER HARDWARE (VECTORIZED & OPTIMIZED) ---
+// --- SHADER HARDWARE ---
 static const char *vertShaderHW = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -122,7 +122,7 @@ QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     makeCurrent();
     releaseHWFrame();
     deInitTextures();
-    m_vao.destroy(); // Destroy VAO
+    m_vao.destroy();
     m_vbo.destroy();
     doneCurrent();
 }
@@ -154,18 +154,13 @@ void QYuvOpenGLWidget::initializeGL() {
     initShader();
     initTextures();
 
-    // --- OPTIMIZATION: VAO SETUP ---
-    // Kita setup state OpenGL SEKALI saja di sini, bukan setiap frame.
+    // --- VAO SETUP ---
     m_vao.create();
     m_vao.bind();
 
     m_vbo.create();
     m_vbo.bind();
     m_vbo.allocate(coordinate, sizeof(coordinate));
-
-    // Define Attributes layout
-    // Karena input vertex & texture coord sama untuk HW dan SW shader,
-    // kita cukup setup pointer-nya sekali di VAO ini.
     
     // Vertex Pos (vec3) - Location 0/vertexIn
     m_programHW.enableAttributeArray("vertexIn");
@@ -201,9 +196,8 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        // Linear sampling untuk visual lebih halus
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
@@ -227,13 +221,10 @@ void QYuvOpenGLWidget::paintGL() {
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     m_vb->unLock();
 
-    // --- OPTIMIZATION: BIND VAO ONCE ---
-    // Tidak perlu lagi enableAttributeArray & setAttributeBuffer setiap kali paint.
-    // Cukup bind VAO yang sudah merekam state itu.
+    // --- BIND VAO ---
     QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
 
     if (!frame && m_currentHWFrame) {
-        // Redraw last HW frame (e.g. resize window)
         renderHardwareFrame(nullptr);
         return;
     }
@@ -299,16 +290,14 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         const AVDRMPlaneDescriptor *planeY = nullptr;
         const AVDRMPlaneDescriptor *planeUV = nullptr;
 
-        // --- INTEL/AMD LOGIC KEPT INTACT (User Request) ---
-        // Ini logic sakral kamu, jangan diubah!
         if (desc->nb_layers > 0) {
             planeY = &desc->layers[0].planes[0];
         }
 
         if (desc->nb_layers > 1) {
-            planeUV = &desc->layers[1].planes[0]; // Intel Gen 11+ Style
+            planeUV = &desc->layers[1].planes[0];
         } else if (desc->layers[0].nb_planes > 1) {
-            planeUV = &desc->layers[0].planes[1]; // AMD/Standard Style
+            planeUV = &desc->layers[0].planes[1];
         }
 
         if (planeY) {
@@ -325,7 +314,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (m_eglImageY == EGL_NO_IMAGE_KHR) return;
 
     m_programHW.bind();
-    // Note: VAO is already bound in paintGL!
 
     // Bind Texture Units
     glActiveTexture(GL_TEXTURE0);
@@ -348,7 +336,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
 }
 
 void QYuvOpenGLWidget::renderSoftwareFrame() {
-    // VAO sudah bound di paintGL, jadi attribute pointers sudah aman.
     m_programSW.bind();
     m_programSW.setUniformValue("tex_y", 0);
     m_programSW.setUniformValue("tex_u", 1);
@@ -356,7 +343,7 @@ void QYuvOpenGLWidget::renderSoftwareFrame() {
 }
 
 void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV) {
-    // Fungsi ini dipanggil hanya saat fallback Software
+
     renderSoftwareFrame();
     
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_textures[0]);

@@ -25,8 +25,6 @@ bool VideoBuffer::init()
         goto error;
     }
 
-    // there is initially no rendering frame, so consider it has already been
-    // consumed
     m_renderingFrameConsumed = true;
 
     m_fpsCounter.start();
@@ -75,8 +73,6 @@ void VideoBuffer::offerDecodedFrame(bool &previousFrameSkipped)
     m_mutex.lock();
 
     if (m_renderExpiredFrames) {
-        // if m_renderExpiredFrames is enable, then the decoder must wait for the current
-        // frame to be consumed
         while (!m_renderingFrameConsumed && !m_interrupted) {
             m_renderingFrameConsumedCond.wait(&m_mutex);
         }
@@ -102,10 +98,9 @@ void VideoBuffer::peekFrameInfo(int &width, int &height, int &format)
     } else {
         width = 0;
         height = 0;
-        format = -1; // AV_PIX_FMT_NONE
+        format = -1;
     }
-    // Kita hanya mengintip, jangan panggil unLock() yang men-trigger swap buffer!
-    // Cukup buka mutex manual.
+
     m_mutex.unlock();
 }
 
@@ -117,8 +112,6 @@ const AVFrame *VideoBuffer::consumeRenderedFrame()
         m_fpsCounter.addRenderedFrame();
     }
     if (m_renderExpiredFrames) {
-        // if m_renderExpiredFrames is enable, then notify the decoder the current frame is
-        // consumed, so that it may push a new one
         m_renderingFrameConsumedCond.wakeOne();
     }
     return m_renderingframe;
@@ -132,37 +125,29 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
 
     lock();
     auto frame = m_renderingframe;
-    
-    // --- SAFETY GUARD FOR ZERO COPY ---
-    // Jika frame kosong atau formatnya Hardware (DRM_PRIME / VAAPI), 
-    // JANGAN coba-coba convert pakai CPU (sws_scale) di sini.
-    // Nanti crash. Skip saja dulu.
+
     if (!frame || frame->format == AV_PIX_FMT_DRM_PRIME || frame->format == AV_PIX_FMT_VAAPI) {
         unLock();
         return; 
     }
-    // ----------------------------------
 
     int width = frame->width;
     int height = frame->height;
     int linesize = frame->linesize[0];
 
-    // create buffer
     uint8_t* rgbBuffer = new uint8_t[linesize * height * 4];
     AVFrame *rgbFrame = av_frame_alloc();
     if (!rgbFrame) {
         delete [] rgbBuffer;
-        unLock(); // Jangan lupa unlock jika fail
+        unLock();
         return;
     }
 
-    // bind buffer to AVFrame
     av_image_fill_arrays(rgbFrame->data, rgbFrame->linesize, rgbBuffer, AV_PIX_FMT_RGB32, width, height, 4);
 
-    // convert
     AVFrameConvert convert;
-    // ... (sisa kode convert biarkan sama)
-    convert.setSrcFrameInfo(width, height, (AVPixelFormat)frame->format); // Gunakan format frame dinamis
+
+    convert.setSrcFrameInfo(width, height, (AVPixelFormat)frame->format);
     convert.setDstFrameInfo(width, height, AV_PIX_FMT_RGB32);
     
     bool ret = false;
@@ -170,15 +155,15 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
     if (!ret) {
         delete [] rgbBuffer;
         av_free(rgbFrame);
-        unLock(); // Jangan lupa unlock
+        unLock();
         return;
     }
     ret = convert.convert(frame, rgbFrame);
     if (!ret) {
         delete [] rgbBuffer;
         av_free(rgbFrame);
-        convert.deInit(); // Pastikan deInit dipanggil
-        unLock(); // Jangan lupa unlock
+        convert.deInit();
+        unLock();
         return;
     }
     convert.deInit();
@@ -195,7 +180,7 @@ void VideoBuffer::interrupt()
         m_mutex.lock();
         m_interrupted = true;
         m_mutex.unlock();
-        // wake up blocking wait
+
         m_renderingFrameConsumedCond.wakeOne();
     }
 }

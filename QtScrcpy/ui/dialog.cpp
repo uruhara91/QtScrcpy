@@ -33,6 +33,7 @@ const QString &getKeyMapPath()
 Dialog::Dialog(QWidget *parent) : QWidget(parent), ui(new Ui::Widget)
 {
     ui->setupUi(this);
+    this->setStyleSheet("background-color: black;");
     initUI();
 
     updateBootConfig(true);

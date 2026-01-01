@@ -17,6 +17,8 @@ void TcpServer::incomingConnection(qintptr handle)
     } else {
         QTcpSocket *socket = new QTcpSocket();
         socket->setSocketDescriptor(handle);
+        socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
+        socket->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
         addPendingConnection(socket);
     }
 }

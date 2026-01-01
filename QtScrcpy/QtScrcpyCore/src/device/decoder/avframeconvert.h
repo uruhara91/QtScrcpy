@@ -6,7 +6,7 @@ extern "C"
 {
 #include "libavcodec/avcodec.h"
 #include "libavutil/frame.h"
-#include "libavutil/hwcontext.h" // Penting untuk transfer data HW
+#include "libavutil/hwcontext.h"
 #include "libswscale/swscale.h"
 #include "libavutil/pixdesc.h"
 }
@@ -26,8 +26,7 @@ public:
     bool init();
     bool isInit();
     void deInit();
-    
-    // Fungsi convert sekarang lebih pintar menangani HW Frame
+
     bool convert(const AVFrame *srcFrame, AVFrame *dstFrame);
 
 private:

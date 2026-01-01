@@ -5,7 +5,7 @@
 #include <QOpenGLFunctions>
 #include <QOpenGLBuffer>
 #include <QOpenGLShaderProgram>
-#include <QOpenGLVertexArrayObject> // <--- OPTIMIZATION: Added VAO
+#include <QOpenGLVertexArrayObject>
 #include <QMutex>
 
 // --- EGL & DRM Dependencies ---
@@ -65,7 +65,7 @@ private:
     VideoBuffer *m_vb = nullptr;
     
     QOpenGLBuffer m_vbo;
-    QOpenGLVertexArrayObject m_vao; // <--- OPTIMIZATION: The VAO Handle
+    QOpenGLVertexArrayObject m_vao;
     
     QOpenGLShaderProgram m_programSW;
     QOpenGLShaderProgram m_programHW;

@@ -19,18 +19,11 @@
 
 #include "config.h"
 #include "iconhelper.h"
-
-// --- FIX 1: Gunakan Relative Path untuk memastikan header yang benar terambil ---
 #include "../render/qyuvopenglwidget.h"
-// ------------------------------------------------------------------------------
-
 #include "toolform.h"
 #include "mousetap/mousetap.h"
 #include "ui_videoform.h"
 #include "videoform.h"
-
-// --- FIX 2: Include Core Headers untuk Zero Copy ---
-// Kita butuh ini untuk mengakses videoBuffer() dari Decoder
 #include "../QtScrcpyCore/src/device/device.h"
 #include "../QtScrcpyCore/src/device/decoder/decoder.h"
 #include "../QtScrcpyCore/src/device/decoder/videobuffer.h"
@@ -39,6 +32,7 @@
 VideoForm::VideoForm(bool framelessWindow, bool skin, bool showToolbar, QWidget *parent) : QWidget(parent), ui(new Ui::videoForm), m_skin(skin)
 {
     ui->setupUi(this);
+    this->setStyleSheet("background-color: black;");
     initUI();
     installShortcut();
     updateShowSize(size());
@@ -74,8 +68,6 @@ void VideoForm::initUI()
 #endif
     }
 
-    // Karena header sudah benar (../render/qyuvopenglwidget.h),
-    // compiler sekarang harusnya tahu ukuran class ini.
     m_videoWidget = new QYuvOpenGLWidget();
     m_videoWidget->hide();
     ui->keepRatioWidget->setWidget(m_videoWidget);
@@ -89,7 +81,7 @@ void VideoForm::initUI()
     m_fpsLabel->setFont(ft);
     m_fpsLabel->move(5, 15);
     m_fpsLabel->setMinimumWidth(100);
-    m_fpsLabel->setStyleSheet(R"(QLabel {color: #00FF00;})");
+    m_fpsLabel->setStyleSheet(R"(QLabel {color: #00FF00; background: transparent;})");
 
     setMouseTracking(true);
     m_videoWidget->setMouseTracking(true);

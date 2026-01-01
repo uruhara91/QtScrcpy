@@ -41,15 +41,10 @@ bool AVFrameConvert::init()
         return true;
     }
 
-    // Jika format source adalah hardware (VAAPI/DRM), kita tidak bisa langsung init sws_context
-    // dengan format tersebut. Kita harus berasumsi nanti akan di-transfer ke format SW (biasanya NV12).
     AVPixelFormat realSrcFormat = m_srcFormat;
-    
-    // Cek apakah ini format Hardware
+
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(m_srcFormat);
     if (desc && (desc->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
-        // Untuk Intel VAAPI, format software di baliknya biasanya NV12
-        // Kita set konteks sws untuk menerima NV12
         realSrcFormat = AV_PIX_FMT_NV12;
     }
 
@@ -89,33 +84,26 @@ bool AVFrameConvert::convert(const AVFrame *srcFrame, AVFrame *dstFrame)
     bool isHwFrame = (srcFrame->format == AV_PIX_FMT_VAAPI || 
                       srcFrame->format == AV_PIX_FMT_DRM_PRIME);
 
-    // --- LOGIKA TRANSFER GPU -> CPU (Untuk Screenshot/Thumbnail) ---
     if (isHwFrame) {
-        // Alokasi frame sementara di software (RAM)
         swFrame = av_frame_alloc();
         if (!swFrame) return false;
 
-        // Download data dari GPU ke CPU
-        // Ini akan otomatis mengubah format VAAPI/DRM menjadi NV12 (biasanya)
         int ret = av_hwframe_transfer_data(swFrame, srcFrame, 0);
         if (ret < 0) {
             qCritical("AVFrameConvert: Failed to transfer data from GPU to CPU: %d", ret);
             av_frame_free(&swFrame);
             return false;
         }
-        
-        // Update pointer data ke frame software yang baru didownload
+
         srcData = swFrame->data;
         srcLinesize = swFrame->linesize;
     }
-    // -------------------------------------------------------------
 
     int ret = sws_scale(m_convertCtx,
                         srcData, srcLinesize,
                         0, m_srcHeight,
                         dstFrame->data, dstFrame->linesize);
 
-    // Bersihkan frame sementara jika tadi kita membuatnya
     if (swFrame) {
         av_frame_free(&swFrame);
     }
