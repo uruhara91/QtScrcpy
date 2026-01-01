@@ -72,9 +72,10 @@ private:
     QOpenGLShaderProgram m_programSW;
     QOpenGLShaderProgram m_programHW;
 
-    // index 0-2: Y, U, V textures (SW)
-    // HW Mode will reuse index 0 (Y) and 1 (UV)
-    GLuint m_textures[4] = {0, 0, 0, 0};
+    // Index 0-1: HW Set A (Y, UV)
+    // Index 2-3: HW Set B (Y, UV)
+    // Index 4-6: SW Mode (Y, U, V)
+    GLuint m_textures[6] = {0, 0, 0, 0, 0, 0};
 
     PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
     PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;

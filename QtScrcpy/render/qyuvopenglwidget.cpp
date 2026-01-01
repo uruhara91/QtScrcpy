@@ -266,7 +266,7 @@ EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, i
     }
 
     // 2. LRU
-    while (m_eglImageCache.size() >= 7) {
+    while (m_eglImageCache.size() >= 10) {
         if (m_cacheRecentUse.isEmpty()) break;
         
         // Ambil key
@@ -351,22 +351,26 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     m_programHW.bind();
 
     // Bind Texture Units
+    static int frameCounter = 0;
+    int baseTexIdx = (frameCounter % 2) * 2;
+    frameCounter++;
+
+    // Bind Texture Y (Index 0 / 2)
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_textures[0]);
+    glBindTexture(GL_TEXTURE_2D, m_textures[baseTexIdx]); 
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageY);
     m_programHW.setUniformValue("tex_y", 0);
 
+    // Bind Texture UV (Index 1 / 3)
     if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, m_textures[1]);
+        glBindTexture(GL_TEXTURE_2D, m_textures[baseTexIdx + 1]); 
         m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageUV);
         m_programHW.setUniformValue("tex_uv_raw", 1);
     }
 
     m_programHW.setUniformValue("width", (float)m_frameSize.width());
-
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    
     m_programHW.release();
 }
 
@@ -383,8 +387,10 @@ void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *data
     
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeY, m_frameSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, dataY);
+    
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeU, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataU);
+    
     glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, m_textures[2]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeV, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataV);
     
