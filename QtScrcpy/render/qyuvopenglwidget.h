@@ -7,13 +7,13 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 #include <QMutex>
-
 #include <QMap>
 #include <QPair>
 
-// --- EGL & DRM Dependencies ---
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h> 
 #include <libdrm/drm_fourcc.h>
 
 // Forward Declaration
@@ -74,6 +74,10 @@ private:
     // index 0-2: Y, U, V textures (SW)
     // HW Mode will reuse index 0 (Y) and 1 (UV)
     GLuint m_textures[4] = {0, 0, 0, 0};
+
+    PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
+    PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;
+    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES = nullptr;
 
     // --- EGL Zero-Copy Resources ---
     EGLImageKHR m_eglImageY = EGL_NO_IMAGE_KHR;
