@@ -43,9 +43,10 @@ bool Decoder::initHWDecoder(const AVCodec *codec)
     (void)codec;
     
     int ret = 0;
-    ret = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_VAAPI, NULL, NULL, 0);
+    ret = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_VAAPI, "/dev/dri/renderD128", NULL, 0);
     if (ret < 0) {
         qCritical("Failed to create VAAPI device context. Error: %d", ret);
+        ret = av_hwdevice_ctx_create(&m_hwDeviceCtx, AV_HWDEVICE_TYPE_VAAPI, NULL, NULL, 0);
         return false;
     }
     
@@ -71,10 +72,11 @@ bool Decoder::open()
     if (!m_codecCtx) {
         qCritical("Could not allocate decoder context");
         return false;
-
-        m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
-        m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
     }
+
+    m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
+    m_codecCtx->thread_type = FF_THREAD_SLICE;
 
     if (!initHWDecoder(codec)) {
         qWarning("VAAPI init failed, falling back to software decoding.");
