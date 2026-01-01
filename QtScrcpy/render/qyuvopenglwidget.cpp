@@ -64,50 +64,37 @@ static const char *vertShaderHW = R"(
 )";
 
 static const char *fragShaderHW = R"(
-    // Precision Hint
     #ifdef GL_ES
     precision mediump float;
     #endif
 
     varying vec2 textureOut;
-    uniform sampler2D tex_y;      // Y Plane (R8)
-    uniform sampler2D tex_uv_raw; // UV Plane (R8 Raw)
-    uniform float width;          // Texture Width
+    uniform sampler2D tex_y;
+    uniform sampler2D tex_uv_raw;
+    uniform float width;
 
-    // Pre-calculated vectors for BT.709
-    const vec3 coeff_r = vec3(1.0, 0.0, 1.7927);
-    const vec3 coeff_g = vec3(1.0, -0.2132, -0.5329);
-    const vec3 coeff_b = vec3(1.0, 2.1124, 0.0);
+    // BT.601 coefficients
+    const vec3 offset = vec3(0.0627, 0.5, 0.5);
+    const mat3 yuv2rgb = mat3(
+        1.164,  1.164,  1.164,
+        0.000, -0.392,  2.017,
+        1.596, -0.813,  0.000
+    );
 
     void main(void) {
-        float y, u, v;
-
-        // 1. Fetch Y (Luminance)
-        y = texture2D(tex_y, textureOut).r;
-
-        // 2. Fetch UV (Chroma) with Pixel Center Sampling
+        // Sample Y
+        float y = texture2D(tex_y, textureOut).r - offset.x;
+        
+        // Sample UV
         float texelSize = 1.0 / width;
-        float pixelPos = textureOut.x * width;
+        float u_x = (floor(textureOut.x * width * 0.5) * 2.0 + 0.5) * texelSize;
+        float v_x = u_x + texelSize;
         
-        // Logic: floor
-        float u_x = (floor(pixelPos * 0.5) * 2.0 + 0.5) * texelSize;
-        float v_x = u_x + texelSize; 
+        float u = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r - offset.y;
+        float v = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r - offset.z;
         
-        // Reading UV
-        u = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r - 0.5; 
-        v = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r - 0.5; 
-
-        // 3. COLOR CORRECTION
-        y = (y - 0.0627) * 1.1643;
-
-        vec3 yuv = vec3(y, u, v);
-        vec3 rgb;
-
-        // Dot Product is native GPU instruction
-        rgb.r = dot(yuv, coeff_r);
-        rgb.g = dot(yuv, coeff_g);
-        rgb.b = dot(yuv, coeff_b);
-
+        // Matrix multiply
+        vec3 rgb = yuv2rgb * vec3(y, u, v);
         gl_FragColor = vec4(rgb, 1.0);
     }
 )";
