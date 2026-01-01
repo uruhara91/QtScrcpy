@@ -78,7 +78,7 @@ bool Decoder::open()
     m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
     m_codecCtx->thread_type = FF_THREAD_SLICE;
 
-    m_codecCtx->extra_hw_frames = 10;
+    m_codecCtx->extra_hw_frames = 1;
 
     if (!initHWDecoder(codec)) {
         qWarning("VAAPI init failed, falling back to software decoding.");
