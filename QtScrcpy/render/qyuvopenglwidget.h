@@ -8,6 +8,9 @@
 #include <QOpenGLVertexArrayObject>
 #include <QMutex>
 
+#include <QMap>
+#include <QPair>
+
 // --- EGL & DRM Dependencies ---
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -56,9 +59,7 @@ private:
     void renderHardwareFrame(const AVFrame *frame);
 
     // Helper cleanup
-    void releaseHWFrame();
-
-    EGLImageKHR createImageFromPlane(const AVDRMPlaneDescriptor &plane, int width, int height, const AVDRMObjectDescriptor &obj);
+    // void releaseHWFrame();
 
 private:
     QSize m_frameSize = { -1, -1 };
@@ -80,10 +81,19 @@ private:
     
     const AVFrame *m_currentHWFrame = nullptr;
 
-    // --- Function Pointers ---
-    PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
-    PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;
-    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES = nullptr;
+    // EGL Image Cache Structure
+    struct EGLImageCacheEntry {
+        EGLImageKHR image;
+        int width;
+        int height;
+    };
+    
+    // Key: Pair<FD, Offset> | Value: Entry Cache
+    QMap<QPair<int, int>, EGLImageCacheEntry> m_eglImageCache;
+
+    // Helper
+    void flushEGLCache(); 
+    EGLImageKHR getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier);
 };
 
 #endif // QYUVOPENGLWIDGET_H

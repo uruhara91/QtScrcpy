@@ -64,7 +64,7 @@ static const char *vertShaderHW = R"(
 )";
 
 static const char *fragShaderHW = R"(
-    // Precision Hint: Good for mobile/embedded GPU performance
+    // Precision Hint
     #ifdef GL_ES
     precision mediump float;
     #endif
@@ -121,7 +121,8 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {}
 
 QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     makeCurrent();
-    releaseHWFrame();
+    
+    flushEGLCache(); 
     deInitTextures();
     m_vao.destroy();
     m_vbo.destroy();
@@ -228,65 +229,84 @@ void QYuvOpenGLWidget::paintGL() {
     // --- BIND VAO ---
     QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
 
-    if (!frame && m_currentHWFrame) {
-        renderHardwareFrame(nullptr);
-        return;
-    }
     if (!frame) return;
 
     if (frame->format == AV_PIX_FMT_DRM_PRIME) {
         renderHardwareFrame(frame);
     } else {
-        releaseHWFrame();
+        
         updateTextures(frame->data[0], frame->data[1], frame->data[2], 
                        frame->linesize[0], frame->linesize[1], frame->linesize[2]);
     }
 }
 
-void QYuvOpenGLWidget::releaseHWFrame() {
-    if (m_eglImageY != EGL_NO_IMAGE_KHR) {
-        m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageY);
-        m_eglImageY = EGL_NO_IMAGE_KHR;
+// Bersih-bersih Cache
+void QYuvOpenGLWidget::flushEGLCache() {
+    if (!m_eglDestroyImageKHR) return;
+
+    auto it = m_eglImageCache.begin();
+    while (it != m_eglImageCache.end()) {
+        m_eglDestroyImageKHR(eglGetCurrentDisplay(), it.value().image);
+        ++it;
     }
-    if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
-        m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageUV);
-        m_eglImageUV = EGL_NO_IMAGE_KHR;
-    }
-    m_currentHWFrame = nullptr;
+    m_eglImageCache.clear();
+    // qInfo() << "[HW] EGL Cache Flushed";
 }
 
-EGLImageKHR QYuvOpenGLWidget::createImageFromPlane(const AVDRMPlaneDescriptor &plane, int width, int height, const AVDRMObjectDescriptor &obj) {
+// Core Caching Logic
+EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier) {
+    QPair<int, int> key = qMakePair(fd, offset);
+
+    // 1. Cek Cache
+    if (m_eglImageCache.contains(key)) {
+        EGLImageCacheEntry entry = m_eglImageCache[key];
+        
+        if (entry.width == width && entry.height == height) {
+            return entry.image;
+        } else {
+            
+            m_eglDestroyImageKHR(eglGetCurrentDisplay(), entry.image);
+            m_eglImageCache.remove(key);
+        }
+    }
+
+    // 2. Create baru
     EGLint attribs[50];
     int i = 0;
-    attribs[i++] = EGL_WIDTH;
-    attribs[i++] = width;
-    attribs[i++] = EGL_HEIGHT;
-    attribs[i++] = height;
-    attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT;
-    attribs[i++] = DRM_FORMAT_R8; 
+    attribs[i++] = EGL_WIDTH; attribs[i++] = width;
+    attribs[i++] = EGL_HEIGHT; attribs[i++] = height;
+    attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT; attribs[i++] = DRM_FORMAT_R8;
+    attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT; attribs[i++] = fd;
+    attribs[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT; attribs[i++] = offset;
+    attribs[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT; attribs[i++] = pitch;
     
-    attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-    attribs[i++] = obj.fd;
-    attribs[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-    attribs[i++] = plane.offset;
-    attribs[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-    attribs[i++] = plane.pitch;
-    
-    if (obj.format_modifier != DRM_FORMAT_MOD_INVALID) {
+    if (modifier != DRM_FORMAT_MOD_INVALID) {
         attribs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
-        attribs[i++] = obj.format_modifier & 0xFFFFFFFF;
+        attribs[i++] = modifier & 0xFFFFFFFF;
         attribs[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
-        attribs[i++] = obj.format_modifier >> 32;
+        attribs[i++] = modifier >> 32;
     }
     attribs[i++] = EGL_NONE;
-    
-    return m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
+
+    EGLImageKHR img = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
+
+    // 3. Simpan ke Cache
+    if (img != EGL_NO_IMAGE_KHR) {
+        m_eglImageCache.insert(key, {img, width, height});
+    }
+
+    return img;
 }
 
 void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (frame) {
-        releaseHWFrame();
-        m_currentHWFrame = frame;
+        
+        static int lastW = 0, lastH = 0;
+        if (frame->width != lastW || frame->height != lastH) {
+            flushEGLCache();
+            lastW = frame->width;
+            lastH = frame->height;
+        }
 
         const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
         if (!desc) return;
@@ -306,12 +326,14 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
 
         if (planeY) {
             const AVDRMObjectDescriptor &obj = desc->objects[planeY->object_index];
-            m_eglImageY = createImageFromPlane(*planeY, frame->width, frame->height, obj);
+            m_eglImageY = getCachedEGLImage(obj.fd, planeY->offset, planeY->pitch, 
+                                            frame->width, frame->height, obj.format_modifier);
         }
 
         if (planeUV) {
             const AVDRMObjectDescriptor &obj = desc->objects[planeUV->object_index];
-            m_eglImageUV = createImageFromPlane(*planeUV, frame->width, frame->height / 2, obj);
+            m_eglImageUV = getCachedEGLImage(obj.fd, planeUV->offset, planeUV->pitch, 
+                                             frame->width, frame->height / 2, obj.format_modifier);
         }
     }
 
