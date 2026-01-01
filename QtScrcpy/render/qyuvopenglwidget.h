@@ -9,6 +9,7 @@
 #include <QMutex>
 #include <QMap>
 #include <QPair>
+#include <QList>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -92,10 +93,10 @@ private:
         int height;
     };
     
-    // Key: Pair<FD, Offset> | Value: Entry Cache
     QMap<QPair<int, int>, EGLImageCacheEntry> m_eglImageCache;
+    
+    QList<QPair<int, int>> m_cacheRecentUse; 
 
-    // Helper
     void flushEGLCache(); 
     EGLImageKHR getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier);
 };

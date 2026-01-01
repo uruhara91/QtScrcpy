@@ -240,7 +240,6 @@ void QYuvOpenGLWidget::paintGL() {
     }
 }
 
-// Bersih-bersih Cache
 void QYuvOpenGLWidget::flushEGLCache() {
     if (!m_eglDestroyImageKHR) return;
 
@@ -250,27 +249,42 @@ void QYuvOpenGLWidget::flushEGLCache() {
         ++it;
     }
     m_eglImageCache.clear();
-    // qInfo() << "[HW] EGL Cache Flushed";
+    m_cacheRecentUse.clear();
 }
 
-// Core Caching Logic
 EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier) {
     QPair<int, int> key = qMakePair(fd, offset);
 
     // 1. Cek Cache
     if (m_eglImageCache.contains(key)) {
-        EGLImageCacheEntry entry = m_eglImageCache[key];
+        m_cacheRecentUse.removeOne(key); 
+        m_cacheRecentUse.append(key);
         
+        EGLImageCacheEntry entry = m_eglImageCache[key];
         if (entry.width == width && entry.height == height) {
             return entry.image;
         } else {
-            
             m_eglDestroyImageKHR(eglGetCurrentDisplay(), entry.image);
             m_eglImageCache.remove(key);
+            m_cacheRecentUse.removeOne(key);
         }
     }
 
-    // 2. Create baru
+    // 2. LRU
+    while (m_eglImageCache.size() >= 5) {
+        if (m_cacheRecentUse.isEmpty()) break;
+        
+        // Ambil key yang paling jarang dipake (paling depan)
+        QPair<int, int> oldKey = m_cacheRecentUse.takeFirst();
+        
+        if (m_eglImageCache.contains(oldKey)) {
+            // Destroy Image biar Buffer-nya balik ke Pool FFmpeg
+            m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageCache[oldKey].image);
+            m_eglImageCache.remove(oldKey);
+        }
+    }
+
+    // 3. Create
     EGLint attribs[50];
     int i = 0;
     attribs[i++] = EGL_WIDTH; attribs[i++] = width;
@@ -290,9 +304,10 @@ EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, i
 
     EGLImageKHR img = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
 
-    // 3. Simpan ke Cache
+    // 4. Caching
     if (img != EGL_NO_IMAGE_KHR) {
         m_eglImageCache.insert(key, {img, width, height});
+        m_cacheRecentUse.append(key);
     }
 
     return img;
