@@ -129,11 +129,11 @@ bool Decoder::push(const AVPacket *packet)
                  return false;
             }
 
-            int mapRet = av_hwframe_map(mappedFrame, decodingFrame, 
-                                        AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_DIRECT);
+            mappedFrame->format = AV_PIX_FMT_DRM_PRIME;
+            int mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ);
 
             if (mapRet < 0) {
-                mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ);
+                mapRet = av_hwframe_map(mappedFrame, decodingFrame, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_WRITE);
             }
 
             if (mapRet == 0) {
