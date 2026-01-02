@@ -349,7 +349,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
         m_programHW.setUniformValue("tex_uv_raw", 1);
     }
 
-    m_programHW.setUniformValue("width", (float)m_frameSize.width());
+    m_programHW.setUniformValue("width", (float)frame->width);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     
