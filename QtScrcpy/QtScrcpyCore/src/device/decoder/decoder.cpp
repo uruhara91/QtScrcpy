@@ -141,9 +141,6 @@ bool Decoder::push(const AVPacket *packet)
 
             // 3. Mapping (Zero Copy Magic)
             int mapRet = av_hwframe_map(m_tempFrame, decodingFrame, AV_HWFRAME_MAP_READ);
-            if (mapRet < 0) {
-                mapRet = av_hwframe_map(m_tempFrame, decodingFrame, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_WRITE);
-            }
 
             if (mapRet == 0) {
                 m_tempFrame->pts = decodingFrame->pts;
