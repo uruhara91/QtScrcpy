@@ -53,7 +53,6 @@ private:
 
     // Helper EGL
     EGLImageKHR createEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier);
-    void destroyPrevImages();
 
 private:
     QSize m_frameSize = { -1, -1 };
@@ -70,10 +69,6 @@ private:
     PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
     PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;
     PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES = nullptr;
-
-    // --- DEFERRED DESTRUCTION VARIABLES ---
-    EGLImageKHR m_prevImgY = EGL_NO_IMAGE_KHR;
-    EGLImageKHR m_prevImgUV = EGL_NO_IMAGE_KHR;
 };
 
 #endif // QYUVOPENGLWIDGET_H

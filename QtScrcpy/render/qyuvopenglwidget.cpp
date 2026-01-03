@@ -11,17 +11,16 @@ extern "C" {
 #define DRM_FORMAT_R8 fourcc_code('R', '8', ' ', ' ')
 #endif
 
-// Vertex data
+// Quad Vertex
 static const GLfloat coordinate[] = {
-    // X, Y, Z,           U, V
     -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
      1.0f, -1.0f, 0.0f,   1.0f, 1.0f,
     -1.0f,  1.0f, 0.0f,   0.0f, 0.0f,
      1.0f,  1.0f, 0.0f,   1.0f, 0.0f
 };
 
-// --- SHADER SOFTWARE ---
-static const char *vertShaderSW = R"(
+// --- SHADER ---
+static const char *vertShader = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
     varying vec2 textureOut;
@@ -31,6 +30,32 @@ static const char *vertShaderSW = R"(
     }
 )";
 
+// Fragment Shader HW
+static const char *fragShaderHW = R"(
+    #ifdef GL_ES
+    precision mediump float;
+    #endif
+    varying vec2 textureOut;
+    uniform sampler2D tex_y;
+    uniform sampler2D tex_uv_raw;
+    uniform float width;
+    const vec3 offset = vec3(0.0627, 0.5, 0.5);
+    const mat3 yuv2rgb = mat3(1.164, 1.164, 1.164, 0.000, -0.392, 2.017, 1.596, -0.813, 0.000);
+
+    void main(void) {
+        float y = texture2D(tex_y, textureOut).r - offset.x;
+        // NEAREST SAMPLING IS KEY HERE
+        float texelSize = 1.0 / width;
+        float u_x = (floor(textureOut.x * width * 0.5) * 2.0 + 0.5) * texelSize;
+        float v_x = u_x + texelSize;
+        float u = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r - offset.y;
+        float v = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r - offset.z;
+        vec3 rgb = yuv2rgb * vec3(y, u, v);
+        gl_FragColor = vec4(rgb, 1.0);
+    }
+)";
+
+// Fragment Shader SW
 static const char *fragShaderSW = R"(
     varying vec2 textureOut;
     uniform sampler2D tex_y;
@@ -42,54 +67,7 @@ static const char *fragShaderSW = R"(
         yuv.x = texture2D(tex_y, textureOut).r;
         yuv.y = texture2D(tex_u, textureOut).r - 0.5;
         yuv.z = texture2D(tex_v, textureOut).r - 0.5;
-        rgb = mat3(1.0, 1.0, 1.0,
-                   0.0, -0.39465, 2.03211,
-                   1.13983, -0.58060, 0.0) * yuv;
-        gl_FragColor = vec4(rgb, 1.0);
-    }
-)";
-
-// --- SHADER HARDWARE ---
-static const char *vertShaderHW = R"(
-    attribute vec3 vertexIn;
-    attribute vec2 textureIn;
-    varying vec2 textureOut;
-    void main(void) {
-        gl_Position = vec4(vertexIn, 1.0);
-        textureOut = textureIn;
-    }
-)";
-
-static const char *fragShaderHW = R"(
-    #ifdef GL_ES
-    precision mediump float;
-    #endif
-
-    varying vec2 textureOut;
-    uniform sampler2D tex_y;
-    uniform sampler2D tex_uv_raw;
-    uniform float width;
-
-    const vec3 offset = vec3(0.0627, 0.5, 0.5);
-    const mat3 yuv2rgb = mat3(
-        1.164,  1.164,  1.164,
-        0.000, -0.392,  2.017,
-        1.596, -0.813,  0.000
-    );
-
-    void main(void) {
-        // Sample Y
-        float y = texture2D(tex_y, textureOut).r - offset.x;
-        
-        // Sample UV (NEAREST + Manual Split)
-        float texelSize = 1.0 / width;
-        float u_x = (floor(textureOut.x * width * 0.5) * 2.0 + 0.5) * texelSize;
-        float v_x = u_x + texelSize;
-        
-        float u = texture2D(tex_uv_raw, vec2(u_x, textureOut.y)).r - offset.y;
-        float v = texture2D(tex_uv_raw, vec2(v_x, textureOut.y)).r - offset.z;
-        
-        vec3 rgb = yuv2rgb * vec3(y, u, v);
+        rgb = mat3(1.0, 1.0, 1.0, 0.0, -0.39465, 2.03211, 1.13983, -0.58060, 0.0) * yuv;
         gl_FragColor = vec4(rgb, 1.0);
     }
 )";
@@ -98,7 +76,6 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {}
 
 QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     makeCurrent();
-    destroyPrevImages();
     deInitTextures();
     m_vao.destroy();
     m_vbo.destroy();
@@ -125,6 +102,7 @@ void QYuvOpenGLWidget::initializeGL() {
     m_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
     m_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
 
+    // DISABLE VSYNC
     QSurfaceFormat format = this->format();
     format.setSwapInterval(0); 
     context()->setFormat(format);
@@ -145,16 +123,15 @@ void QYuvOpenGLWidget::initializeGL() {
 
     m_vbo.release();
     m_vao.release();
-
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
 void QYuvOpenGLWidget::initShader() {
-    m_programSW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderSW);
+    m_programSW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader);
     m_programSW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderSW);
     m_programSW.link();
 
-    m_programHW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderHW);
+    m_programHW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader);
     m_programHW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderHW);
     m_programHW.link();
 }
@@ -163,6 +140,7 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
+
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -181,7 +159,7 @@ void QYuvOpenGLWidget::resizeGL(int width, int height) {
 }
 
 void QYuvOpenGLWidget::paintGL() {
-    glClear(GL_COLOR_BUFFER_BIT);
+
     if (!m_vb) return;
 
     m_vb->lock();
@@ -201,19 +179,6 @@ void QYuvOpenGLWidget::paintGL() {
         renderHardwareFrame(frame);
     } else {
         renderSoftwareFrame(frame);
-    }
-
-    glFlush();
-}
-
-void QYuvOpenGLWidget::destroyPrevImages() {
-    if (m_prevImgY != EGL_NO_IMAGE_KHR) {
-        m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_prevImgY);
-        m_prevImgY = EGL_NO_IMAGE_KHR;
-    }
-    if (m_prevImgUV != EGL_NO_IMAGE_KHR) {
-        m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_prevImgUV);
-        m_prevImgUV = EGL_NO_IMAGE_KHR;
     }
 }
 
@@ -239,9 +204,6 @@ EGLImageKHR QYuvOpenGLWidget::createEGLImage(int fd, int offset, int pitch, int 
 }
 
 void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
-    // 1. CLEANUP OLD FRAME FIRST
-    destroyPrevImages();
-
     const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
     if (!desc) return;
     const AVDRMPlaneDescriptor *planeY = &desc->layers[0].planes[0];
@@ -253,18 +215,22 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (!planeUV) return;
     const AVDRMObjectDescriptor &objUV = desc->objects[planeUV->object_index];
 
-    // 2. CREATE NEW FRAME
+    // CREATE
     EGLImageKHR imgY = createEGLImage(objY.fd, planeY->offset, planeY->pitch, 
                                       frame->width, frame->height, objY.format_modifier);
     
     EGLImageKHR imgUV = createEGLImage(objUV.fd, planeUV->offset, planeUV->pitch, 
                                        frame->width, frame->height / 2, objUV.format_modifier);
 
-    if (imgY == EGL_NO_IMAGE_KHR || imgUV == EGL_NO_IMAGE_KHR) return;
+    if (imgY == EGL_NO_IMAGE_KHR || imgUV == EGL_NO_IMAGE_KHR) {
+         if (imgY) m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgY);
+         if (imgUV) m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgUV);
+         return;
+    }
 
     m_programHW.bind();
 
-    // 3. DRAW
+    // BIND & DRAW
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, imgY);
@@ -276,13 +242,14 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     m_programHW.setUniformValue("tex_uv_raw", 1);
 
     m_programHW.setUniformValue("width", (float)frame->width);
+    
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     
+    // DESTROY
+    m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgY);
+    m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgUV);
+    
     m_programHW.release();
-
-    // 4. SAVE FOR LATER
-    m_prevImgY = imgY;
-    m_prevImgUV = imgUV;
 }
 
 void QYuvOpenGLWidget::renderSoftwareFrame(const AVFrame *frame) {
