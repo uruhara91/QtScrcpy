@@ -257,8 +257,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-    glFlush();
-
     // DESTROY
     m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgY);
     m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgUV);
