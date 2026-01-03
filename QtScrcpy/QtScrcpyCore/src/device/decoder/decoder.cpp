@@ -82,6 +82,7 @@ bool Decoder::open()
     }
 
     m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    m_codecCtx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
     m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
     m_codecCtx->thread_type = FF_THREAD_SLICE;
     m_codecCtx->thread_count = 1;
@@ -129,14 +130,10 @@ bool Decoder::push(const AVPacket *packet)
     ret = avcodec_receive_frame(m_codecCtx, decodingFrame);
     if (ret == 0) {
         if (decodingFrame->format == AV_PIX_FMT_VAAPI) {
-
-            // 1. Reset
+            
             av_frame_unref(m_tempFrame);
-
-            // 2. Set format
             m_tempFrame->format = AV_PIX_FMT_DRM_PRIME;
 
-            // 3. Mapping (Zero Copy Magic)
             int mapRet = av_hwframe_map(m_tempFrame, decodingFrame, AV_HWFRAME_MAP_READ);
 
             if (mapRet == 0) {
@@ -145,17 +142,17 @@ bool Decoder::push(const AVPacket *packet)
                 m_tempFrame->width = decodingFrame->width;
                 m_tempFrame->height = decodingFrame->height;
 
-                // 4. SWAP FRAME
                 av_frame_unref(decodingFrame);
                 av_frame_move_ref(decodingFrame, m_tempFrame);
-
+                
+                pushFrame();
             } else {
-                qWarning("Failed to map VAAPI frame: %d", mapRet);
+                qWarning("Failed to map VAAPI frame: %d. Dropping frame.", mapRet);
             }
+        } 
+        else {
+            pushFrame();
         }
-        pushFrame();
-    } else if (ret != AVERROR(EAGAIN)) {
-        return false;
     }
     
     return true;
