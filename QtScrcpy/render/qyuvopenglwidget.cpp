@@ -250,10 +250,9 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, imgUV);
 
-    static int s_lastWidth = -1;
-    if (s_lastWidth != frame->width) {
+    if (m_lastWidth != frame->width) {
         m_programHW.setUniformValue("width", (float)frame->width);
-        s_lastWidth = frame->width;
+        m_lastWidth = frame->width;
     }
     
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);

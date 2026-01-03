@@ -57,6 +57,8 @@ private:
 private:
     QSize m_frameSize = { -1, -1 };
     VideoBuffer *m_vb = nullptr;
+
+    int m_lastWidth = -1;
     
     QOpenGLBuffer m_vbo;
     QOpenGLVertexArrayObject m_vao;
