@@ -7,9 +7,6 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 #include <QMutex>
-#include <QMap>
-#include <QPair>
-#include <QList>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -17,7 +14,6 @@
 #include <GLES2/gl2ext.h> 
 #include <libdrm/drm_fourcc.h>
 
-// Forward Declaration
 class VideoBuffer;
 struct AVFrame;
 struct AVDRMPlaneDescriptor;
@@ -37,12 +33,10 @@ public:
 
     void setFrameSize(const QSize &frameSize);
     const QSize &frameSize();
-
-    // Legacy method
-    void updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV);
-
-    // Zero Copy Interface
     void setVideoBuffer(VideoBuffer *vb);
+
+    // Legacy support
+    void updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV);
 
 protected:
     void initializeGL() override;
@@ -54,10 +48,12 @@ private:
     void initTextures();
     void deInitTextures();
     
-    // Logic render Software
     void renderSoftwareFrame(const AVFrame *frame);
-    // Logic render Hardware
     void renderHardwareFrame(const AVFrame *frame);
+
+    // Helper EGL
+    EGLImageKHR createEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier);
+    void destroyPrevImages();
 
 private:
     QSize m_frameSize = { -1, -1 };
@@ -69,28 +65,15 @@ private:
     QOpenGLShaderProgram m_programSW;
     QOpenGLShaderProgram m_programHW;
 
-    // SW index 0-2: Y, U, V
-    // HW index 0 (Y) and 1 (UV)
     GLuint m_textures[4] = {0, 0, 0, 0};
 
     PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
     PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;
     PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES = nullptr;
-    
-    // EGL Image Cache Structure
-    struct EGLImageCacheEntry {
-        EGLImageKHR image;
-        int width;
-        int height;
-        int pitch;
-    };
-    
-    // Key: Pair(FD, Offset)
-    QMap<QPair<int, int>, EGLImageCacheEntry> m_eglImageCache;
-    
-    void cleanAllEGLCache();
-    
-    EGLImageKHR getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier);
+
+    // --- DEFERRED DESTRUCTION VARIABLES ---
+    EGLImageKHR m_prevImgY = EGL_NO_IMAGE_KHR;
+    EGLImageKHR m_prevImgUV = EGL_NO_IMAGE_KHR;
 };
 
 #endif // QYUVOPENGLWIDGET_H
