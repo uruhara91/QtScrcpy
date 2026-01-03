@@ -105,7 +105,6 @@ void QYuvOpenGLWidget::initializeGL() {
     initializeOpenGLFunctions();
 
     // 1. Dynamic Load EGL Functions (ROBUSTNESS START)
-    // Kita load manual agar aman di berbagai versi driver/mesa
     m_eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
     m_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
     m_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
@@ -118,7 +117,6 @@ void QYuvOpenGLWidget::initializeGL() {
     if (!m_eglCreateImageKHR || !m_eglCreateSyncKHR) {
         qWarning() << "Critical EGL extensions missing! HW Decode might fail or stutter.";
     }
-    // (ROBUSTNESS END)
 
     // 2. Disable VSync for Low Latency
     QSurfaceFormat format = this->format();
@@ -135,7 +133,6 @@ void QYuvOpenGLWidget::initializeGL() {
     m_vbo.bind();
     m_vbo.allocate(coordinate, sizeof(coordinate));
     
-    // Config Attributes based on current program (using HW program layout for setup)
     m_programHW.bind();
     m_programHW.enableAttributeArray("vertexIn");
     m_programHW.setAttributeBuffer("vertexIn", GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
@@ -146,12 +143,11 @@ void QYuvOpenGLWidget::initializeGL() {
     m_vbo.release();
     m_vao.release();
     
-    // Black background
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
 void QYuvOpenGLWidget::initShader() {
-    // Software Shader Compile
+    // Software Shader
     if (!m_programSW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader))
         qWarning() << "SW Vertex Shader failed:" << m_programSW.log();
     if (!m_programSW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderSW))
@@ -159,7 +155,7 @@ void QYuvOpenGLWidget::initShader() {
     if (!m_programSW.link())
         qWarning() << "SW Program Link failed:" << m_programSW.log();
 
-    // Hardware Shader Compile
+    // Hardware Shader
     if (!m_programHW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader))
         qWarning() << "HW Vertex Shader failed:" << m_programHW.log();
     if (!m_programHW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderHW))
@@ -167,7 +163,6 @@ void QYuvOpenGLWidget::initShader() {
     if (!m_programHW.link())
         qWarning() << "HW Program Link failed:" << m_programHW.log();
 
-    // Set Uniforms HW
     m_programHW.bind();
     m_programHW.setUniformValue("tex_y", 0);
     m_programHW.setUniformValue("tex_uv_raw", 1);
@@ -178,8 +173,6 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        // Linear? No, user wants Nearest based on previous shader logic (UV manual calc)
-        // But Y plane usually benefits from Linear. Let's stick to safe Nearest for now per original code.
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -207,11 +200,11 @@ void QYuvOpenGLWidget::paintGL() {
 
     if (!frame) return;
 
-    // Update Size
+    // Update Size (FIXED: Removing invalid signal emission)
     if (frame->width != m_frameSize.width() || frame->height != m_frameSize.height()) {
         m_frameSize.setWidth(frame->width);
         m_frameSize.setHeight(frame->height);
-        emit m_vb->updateFPS(frame->width, frame->height); // Optional update
+        updateGeometry(); 
     }
 
     QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
@@ -250,7 +243,6 @@ EGLImageKHR QYuvOpenGLWidget::createEGLImage(int fd, int offset, int pitch, int 
 
 // --- CORE RENDER LOGIC (OPTIMIZED) ---
 void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
-    // Safety check for extension pointers
     if (!m_eglCreateImageKHR || !m_glEGLImageTargetTexture2DOES) return;
 
     const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
@@ -265,7 +257,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (desc->nb_layers > 1) planeUV = &desc->layers[1].planes[0];
     else if (desc->layers[0].nb_planes > 1) planeUV = &desc->layers[0].planes[1];
     
-    if (!planeUV) return; // Must be NV12
+    if (!planeUV) return;
     const AVDRMObjectDescriptor &objUV = desc->objects[planeUV->object_index];
 
     // 1. CREATE EGL IMAGES
@@ -278,7 +270,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (imgY == EGL_NO_IMAGE_KHR || imgUV == EGL_NO_IMAGE_KHR) {
          if (imgY) m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgY);
          if (imgUV) m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgUV);
-         qWarning() << "Failed to create EGL Images";
          return;
     }
 
@@ -293,7 +284,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, imgUV);
 
-    // Update Uniform if width changed (for Manual UV Sampling)
     if (m_lastWidth != frame->width) {
         m_programHW.setUniformValue("width", (float)frame->width);
         m_lastWidth = frame->width;
@@ -303,29 +293,21 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
     // --- EXPLICIT SYNCHRONIZATION (THE FENCE) ---
-    // Ini adalah kunci agar Create-Destroy tidak menyebabkan stutter.
-    // Kita memaksa CPU menunggu (sedikit) sampai GPU mengonfirmasi 
-    // bahwa perintah Draw di atas sudah masuk antrian eksekusi.
     if (m_eglCreateSyncKHR && m_eglClientWaitSyncKHR && m_eglDestroySyncKHR) {
-        // Buat pagar
         EGLSyncKHR sync = m_eglCreateSyncKHR(eglGetCurrentDisplay(), EGL_SYNC_FENCE_KHR, NULL);
         if (sync != EGL_NO_SYNC_KHR) {
-            // Flush commands. Timeout 1ms (1,000,000 ns) cukup untuk flush.
-            // EGL_SYNC_FLUSH_COMMANDS_BIT_KHR wajib ada.
+            // Flush commands (1ms timeout)
             m_eglClientWaitSyncKHR(eglGetCurrentDisplay(), sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 1000000);
             m_eglDestroySyncKHR(eglGetCurrentDisplay(), sync);
         } else {
-            // Fallback jika gagal create fence (jarang terjadi)
             glFinish(); 
         }
     } else {
-        // Fallback untuk system yang tidak support Fence
         glFlush();
     }
     // ---------------------------------------------
 
     // 4. DESTROY EGL IMAGES
-    // Aman dilakukan sekarang karena ada Fence sebelumnya
     m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgY);
     m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgUV);
     
