@@ -133,7 +133,7 @@ void QYuvOpenGLWidget::initializeGL() {
         qWarning() << "[HW] Critical: Failed to load EGL extensions!";
     }
 
-    // Disable VSync for Lowest Latency (Tearing is better than Lag)
+    // Disable VSync
     QSurfaceFormat format = this->format();
     format.setSwapInterval(0); 
     context()->setFormat(format);
@@ -181,8 +181,6 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        // STRICT MODE: Use NEAREST for speed and sharpness.
-        // Also CRITICAL for the R8 UV workaround to prevent interpolation corruption.
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -222,16 +220,12 @@ void QYuvOpenGLWidget::paintGL() {
     } else {
         renderSoftwareFrame(frame);
     }
-    
-    // STRICT MODE: GL_FLUSH.
-    // Kick command to GPU immediately. Do not wait (finish). Do not buffer.
+
     glFlush();
 }
 
-// Helper to Create EGLImage (Stateless - No Cache Logic)
+// Helper
 EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier) {
-    // Note: Nama fungsi masih 'getCached' biar ga usah ubah Header, 
-    // tapi implementasinya sekarang "Create Only" (No Cache).
     
     EGLint attribs[50];
     int i = 0;
@@ -269,16 +263,15 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (!planeUV) return;
     const AVDRMObjectDescriptor &objUV = desc->objects[planeUV->object_index];
 
-    // 1. CREATE (Every Frame)
+    // 1. CREATE
     EGLImageKHR imgY = getCachedEGLImage(objY.fd, planeY->offset, planeY->pitch, 
                                             frame->width, frame->height, objY.format_modifier);
     
-    // UV Workaround: Full Width
+    // UV Workaround
     EGLImageKHR imgUV = getCachedEGLImage(objUV.fd, planeUV->offset, planeUV->pitch, 
                                             frame->width, frame->height / 2, objUV.format_modifier);
 
     if (imgY == EGL_NO_IMAGE_KHR || imgUV == EGL_NO_IMAGE_KHR) {
-         // Cleanup if one failed
          if (imgY != EGL_NO_IMAGE_KHR) m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgY);
          if (imgUV != EGL_NO_IMAGE_KHR) m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgUV);
          return;
@@ -302,8 +295,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     // 3. DRAW
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     
-    // 4. CLEANUP (Strict Mode: Destroy Immediately)
-    // Important: Unbind texture first is good practice, but destroying EGLImage invalidates it anyway.
+    // 4. CLEANUP
     m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgY);
     m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgUV);
     
@@ -312,7 +304,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
 
 // Dummy clean function (No cache to clean)
 void QYuvOpenGLWidget::cleanAllEGLCache() {
-    // No-op in stateless mode
 }
 
 void QYuvOpenGLWidget::renderSoftwareFrame(const AVFrame *frame) {
