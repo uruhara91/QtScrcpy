@@ -55,12 +55,9 @@ private:
     void deInitTextures();
     
     // Logic render Software
-    void renderSoftwareFrame();
+    void renderSoftwareFrame(const AVFrame *frame);
     // Logic render Hardware
     void renderHardwareFrame(const AVFrame *frame);
-
-    // Helper cleanup
-    // void releaseHWFrame();
 
 private:
     QSize m_frameSize = { -1, -1 };
@@ -79,25 +76,20 @@ private:
     PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
     PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;
     PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES = nullptr;
-
-    // --- EGL Zero-Copy Resources ---
-    EGLImageKHR m_eglImageY = EGL_NO_IMAGE_KHR;
-    EGLImageKHR m_eglImageUV = EGL_NO_IMAGE_KHR;
     
-    const AVFrame *m_currentHWFrame = nullptr;
-
     // EGL Image Cache Structure
     struct EGLImageCacheEntry {
         EGLImageKHR image;
         int width;
         int height;
+        int pitch;
     };
     
+    // Key: Pair(FD, Offset)
     QMap<QPair<int, int>, EGLImageCacheEntry> m_eglImageCache;
     
-    QList<QPair<int, int>> m_cacheRecentUse; 
-
-    void flushEGLCache(); 
+    void cleanAllEGLCache();
+    
     EGLImageKHR getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier);
 };
 

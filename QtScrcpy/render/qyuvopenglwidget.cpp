@@ -358,6 +358,21 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     // glFinish();
 }
 
+void QYuvOpenGLWidget::cleanAllEGLCache() {
+    if (!m_eglDestroyImageKHR) return;
+
+    auto it = m_eglImageCache.begin();
+    while (it != m_eglImageCache.end()) {
+        // Hancurkan object EGL di driver
+        m_eglDestroyImageKHR(eglGetCurrentDisplay(), it.value().image);
+        ++it;
+    }
+
+    m_eglImageCache.clear();
+
+    // qDebug() << "[ZeroCopy] Cache flushed/cleaned.";
+}
+
 void QYuvOpenGLWidget::renderSoftwareFrame() {
     m_programSW.bind();
     m_programSW.setUniformValue("tex_y", 0);
@@ -371,8 +386,10 @@ void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *data
     
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeY, m_frameSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, dataY);
+
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeU, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataU);
+    
     glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, m_textures[2]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeV, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataV);
     
