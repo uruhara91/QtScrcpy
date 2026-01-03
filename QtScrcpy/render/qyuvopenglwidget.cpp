@@ -208,18 +208,23 @@ void QYuvOpenGLWidget::paintGL() {
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     m_vb->unLock();
 
-    // --- BIND VAO ---
-    QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
-
     if (!frame) return;
+
+    if (frame->width != m_frameSize.width() || frame->height != m_frameSize.height()) {
+        m_frameSize.setWidth(frame->width);
+        m_frameSize.setHeight(frame->height);
+        cleanAllEGLCache();
+    }
+
+    QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
 
     if (frame->format == AV_PIX_FMT_DRM_PRIME) {
         renderHardwareFrame(frame);
     } else {
-        
-        updateTextures(frame->data[0], frame->data[1], frame->data[2], 
-                       frame->linesize[0], frame->linesize[1], frame->linesize[2]);
+        renderSoftwareFrame(frame);
     }
+
+    glFlush();
 }
 
 void QYuvOpenGLWidget::flushEGLCache() {
@@ -237,39 +242,26 @@ void QYuvOpenGLWidget::flushEGLCache() {
 EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier) {
     QPair<int, int> key = qMakePair(fd, offset);
 
-    // 1. Cek Cache
+    // --- 1. CEK CACHE ---
     if (m_eglImageCache.contains(key)) {
-        m_cacheRecentUse.removeOne(key); 
-        m_cacheRecentUse.append(key);
-        
         EGLImageCacheEntry entry = m_eglImageCache[key];
-        if (entry.width == width && entry.height == height) {
-            return entry.image;
-        } else {
-            m_eglDestroyImageKHR(eglGetCurrentDisplay(), entry.image);
-            m_eglImageCache.remove(key);
-            m_cacheRecentUse.removeOne(key);
-        }
-    }
-
-    // 2. LRU
-    while (m_eglImageCache.size() >= 2) {
-        if (m_cacheRecentUse.isEmpty()) break;
-        // Ambil key
-        QPair<int, int> oldKey = m_cacheRecentUse.takeFirst();
         
-        if (m_eglImageCache.contains(oldKey)) {
-            m_eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImageCache[oldKey].image);
-            m_eglImageCache.remove(oldKey);
+        // Validation
+        if (entry.width == width && entry.height == height && entry.pitch == pitch) {
+            return entry.image;
         }
+        
+        m_eglDestroyImageKHR(eglGetCurrentDisplay(), entry.image);
+        m_eglImageCache.remove(key);
     }
 
-    // 3. Create
+    // --- 2. CREATE POOL ---
+    
     EGLint attribs[50];
     int i = 0;
     attribs[i++] = EGL_WIDTH; attribs[i++] = width;
     attribs[i++] = EGL_HEIGHT; attribs[i++] = height;
-    attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT; attribs[i++] = DRM_FORMAT_R8;
+    attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT; attribs[i++] = DRM_FORMAT_R8; // Format R8 sesuai workaround kamu
     attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT; attribs[i++] = fd;
     attribs[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT; attribs[i++] = offset;
     attribs[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT; attribs[i++] = pitch;
@@ -284,78 +276,59 @@ EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, i
 
     EGLImageKHR img = m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
 
-    // 4. Caching
     if (img != EGL_NO_IMAGE_KHR) {
-        m_eglImageCache.insert(key, {img, width, height});
-        m_cacheRecentUse.append(key);
+        m_eglImageCache.insert(key, {img, width, height, pitch});
     }
 
     return img;
 }
 
 void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
-    if (frame) {
-        
-        static int lastW = 0, lastH = 0;
-        if (frame->width != lastW || frame->height != lastH) {
-            flushEGLCache();
-            lastW = frame->width;
-            lastH = frame->height;
-        }
+    const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
+    if (!desc) return;
 
-        const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
-        if (!desc) return;
-
-        const AVDRMPlaneDescriptor *planeY = nullptr;
-        const AVDRMPlaneDescriptor *planeUV = nullptr;
-
-        if (desc->nb_layers > 0) {
-            planeY = &desc->layers[0].planes[0];
-        }
-
-        if (desc->nb_layers > 1) {
-            planeUV = &desc->layers[1].planes[0];
-        } else if (desc->layers[0].nb_planes > 1) {
-            planeUV = &desc->layers[0].planes[1];
-        }
-
-        if (planeY) {
-            const AVDRMObjectDescriptor &obj = desc->objects[planeY->object_index];
-            m_eglImageY = getCachedEGLImage(obj.fd, planeY->offset, planeY->pitch, 
-                                            frame->width, frame->height, obj.format_modifier);
-        }
-
-        if (planeUV) {
-            const AVDRMObjectDescriptor &obj = desc->objects[planeUV->object_index];
-            m_eglImageUV = getCachedEGLImage(obj.fd, planeUV->offset, planeUV->pitch, 
-                                             frame->width, frame->height / 2, obj.format_modifier);
-        }
+    // --- Plane Y ---
+    const AVDRMPlaneDescriptor *planeY = &desc->layers[0].planes[0];
+    const AVDRMObjectDescriptor &objY = desc->objects[planeY->object_index];
+    
+    // --- Plane UV ---
+    const AVDRMPlaneDescriptor *planeUV = nullptr;
+    if (desc->nb_layers > 1) {
+        planeUV = &desc->layers[1].planes[0];
+    } else if (desc->layers[0].nb_planes > 1) {
+        planeUV = &desc->layers[0].planes[1];
     }
+    if (!planeUV) return; // Skip kalau bukan format yang diharapkan
+    const AVDRMObjectDescriptor &objUV = desc->objects[planeUV->object_index];
+    
+    // 1. Plane Y
+    EGLImageKHR imgY = getCachedEGLImage(objY.fd, planeY->offset, planeY->pitch, 
+                                         frame->width, frame->height, objY.format_modifier);
+    
+    // 2. Plane UV
+    EGLImageKHR imgUV = getCachedEGLImage(objUV.fd, planeUV->offset, planeUV->pitch, 
+                                          frame->width, frame->height / 2, objUV.format_modifier);
 
-    if (m_eglImageY == EGL_NO_IMAGE_KHR) return;
+    if (imgY == EGL_NO_IMAGE_KHR || imgUV == EGL_NO_IMAGE_KHR) return;
 
     m_programHW.bind();
 
-    // Bind Texture Units
+    // Bind Y -> Texture 0
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_textures[0]);
-    m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageY);
+    m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, imgY);
     m_programHW.setUniformValue("tex_y", 0);
 
-    if (m_eglImageUV != EGL_NO_IMAGE_KHR) {
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, m_textures[1]);
-        m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImageUV);
-        m_programHW.setUniformValue("tex_uv_raw", 1);
-    }
+    // Bind UV -> Texture 1
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, m_textures[1]);
+    m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, imgUV);
+    m_programHW.setUniformValue("tex_uv_raw", 1);
 
     m_programHW.setUniformValue("width", (float)frame->width);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    
     m_programHW.release();
-
-    // glFinish();
 }
 
 void QYuvOpenGLWidget::cleanAllEGLCache() {
