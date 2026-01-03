@@ -44,7 +44,7 @@ static const char *fragShaderHW = R"(
 
     void main(void) {
         float y = texture2D(tex_y, textureOut).r - offset.x;
-        // NEAREST SAMPLING IS KEY HERE
+        // NEAREST SAMPLING MANUAL UNTUK UV
         float texelSize = 1.0 / width;
         float u_x = (floor(textureOut.x * width * 0.5) * 2.0 + 0.5) * texelSize;
         float v_x = u_x + texelSize;
@@ -116,10 +116,13 @@ void QYuvOpenGLWidget::initializeGL() {
     m_vbo.bind();
     m_vbo.allocate(coordinate, sizeof(coordinate));
     
+    // Attribute Locations
+    m_programHW.bind();
     m_programHW.enableAttributeArray("vertexIn");
     m_programHW.setAttributeBuffer("vertexIn", GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
     m_programHW.enableAttributeArray("textureIn");
     m_programHW.setAttributeBuffer("textureIn", GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
+    m_programHW.release();
 
     m_vbo.release();
     m_vao.release();
@@ -127,13 +130,21 @@ void QYuvOpenGLWidget::initializeGL() {
 }
 
 void QYuvOpenGLWidget::initShader() {
+    // Software Shader Init
     m_programSW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader);
     m_programSW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderSW);
     m_programSW.link();
 
+    // Hardware Shader Init
     m_programHW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader);
     m_programHW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderHW);
     m_programHW.link();
+
+    // Uniform Setup
+    m_programHW.bind();
+    m_programHW.setUniformValue("tex_y", 0);
+    m_programHW.setUniformValue("tex_uv_raw", 1);
+    m_programHW.release();
 }
 
 void QYuvOpenGLWidget::initTextures() {
@@ -230,21 +241,25 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
 
     m_programHW.bind();
 
-    // BIND & DRAW
+    // BIND
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, imgY);
-    m_programHW.setUniformValue("tex_y", 0);
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, imgUV);
-    m_programHW.setUniformValue("tex_uv_raw", 1);
 
-    m_programHW.setUniformValue("width", (float)frame->width);
+    static int s_lastWidth = -1;
+    if (s_lastWidth != frame->width) {
+        m_programHW.setUniformValue("width", (float)frame->width);
+        s_lastWidth = frame->width;
+    }
     
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    
+
+    glFlush();
+
     // DESTROY
     m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgY);
     m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgUV);
