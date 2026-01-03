@@ -33,8 +33,7 @@ static const char *vertShader = R"(
     }
 )";
 
-// Fragment Shader HW (MANUAL UV SAMPLING - SENSITIVE!)
-// Note: Kode ini dipertahankan persis sesuai request untuk workaround driver Intel Gen11
+// Fragment Shader HW
 static const char *fragShaderHW = R"(
     #ifdef GL_ES
     precision mediump float;
@@ -59,7 +58,7 @@ static const char *fragShaderHW = R"(
     }
 )";
 
-// Fragment Shader SW (Fallback)
+// Fragment Shader SW
 static const char *fragShaderSW = R"(
     varying vec2 textureOut;
     uniform sampler2D tex_y;
@@ -104,7 +103,7 @@ void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
 void QYuvOpenGLWidget::initializeGL() {
     initializeOpenGLFunctions();
 
-    // 1. Dynamic Load EGL Functions (ROBUSTNESS START)
+    // 1. Dynamic Load EGL Functions
     m_eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
     m_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
     m_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
@@ -118,7 +117,7 @@ void QYuvOpenGLWidget::initializeGL() {
         qWarning() << "Critical EGL extensions missing! HW Decode might fail or stutter.";
     }
 
-    // 2. Disable VSync for Low Latency
+    // 2. Disable VSync
     QSurfaceFormat format = this->format();
     format.setSwapInterval(0); 
     context()->setFormat(format);
@@ -193,14 +192,12 @@ void QYuvOpenGLWidget::resizeGL(int width, int height) {
 void QYuvOpenGLWidget::paintGL() {
     if (!m_vb) return;
 
-    // Retrieve Frame from Decoder
     m_vb->lock();
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     m_vb->unLock();
 
     if (!frame) return;
 
-    // Update Size (FIXED: Removing invalid signal emission)
     if (frame->width != m_frameSize.width() || frame->height != m_frameSize.height()) {
         m_frameSize.setWidth(frame->width);
         m_frameSize.setHeight(frame->height);
@@ -241,7 +238,7 @@ EGLImageKHR QYuvOpenGLWidget::createEGLImage(int fd, int offset, int pitch, int 
     return m_eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
 }
 
-// --- CORE RENDER LOGIC (OPTIMIZED) ---
+// --- CORE RENDER LOGIC ---
 void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     if (!m_eglCreateImageKHR || !m_glEGLImageTargetTexture2DOES) return;
 
@@ -252,7 +249,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     const AVDRMPlaneDescriptor *planeY = &desc->layers[0].planes[0];
     const AVDRMObjectDescriptor &objY = desc->objects[planeY->object_index];
     
-    // --- PLANE UV (NV12) ---
+    // --- PLANE UV ---
     const AVDRMPlaneDescriptor *planeUV = nullptr;
     if (desc->nb_layers > 1) planeUV = &desc->layers[1].planes[0];
     else if (desc->layers[0].nb_planes > 1) planeUV = &desc->layers[0].planes[1];
@@ -292,11 +289,11 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     // 3. DRAW
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-    // --- EXPLICIT SYNCHRONIZATION (THE FENCE) ---
+    // --- EXPLICIT SYNCHRONIZATION ---
     if (m_eglCreateSyncKHR && m_eglClientWaitSyncKHR && m_eglDestroySyncKHR) {
         EGLSyncKHR sync = m_eglCreateSyncKHR(eglGetCurrentDisplay(), EGL_SYNC_FENCE_KHR, NULL);
         if (sync != EGL_NO_SYNC_KHR) {
-            // Flush commands (1ms timeout)
+            // Flush commands
             m_eglClientWaitSyncKHR(eglGetCurrentDisplay(), sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 1000000);
             m_eglDestroySyncKHR(eglGetCurrentDisplay(), sync);
         } else {
@@ -305,7 +302,6 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     } else {
         glFlush();
     }
-    // ---------------------------------------------
 
     // 4. DESTROY EGL IMAGES
     m_eglDestroyImageKHR(eglGetCurrentDisplay(), imgY);
