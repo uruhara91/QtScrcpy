@@ -100,7 +100,7 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {}
 
 QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     makeCurrent();
-    cleanAllEGLCache(); // FIXED: Nama fungsi sudah disesuaikan
+    cleanAllEGLCache();
     deInitTextures();
     m_vao.destroy();
     m_vbo.destroy();
@@ -113,9 +113,7 @@ QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize; }
 void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
     if (m_frameSize != frameSize) {
         m_frameSize = frameSize;
-        // Clean cache karena ukuran buffer pasti berubah saat resize
-        // Kita lakukan nanti di paintGL biar thread safe context-nya, 
-        // tapi updateGeometry perlu dipanggil sekarang.
+
         updateGeometry();
     }
 }
@@ -214,7 +212,7 @@ void QYuvOpenGLWidget::paintGL() {
     if (frame->width != m_frameSize.width() || frame->height != m_frameSize.height()) {
         m_frameSize.setWidth(frame->width);
         m_frameSize.setHeight(frame->height);
-        cleanAllEGLCache(); // FIXED: Rename sesuai deklarasi
+        cleanAllEGLCache();
     }
 
     // --- BIND VAO ---
@@ -223,14 +221,11 @@ void QYuvOpenGLWidget::paintGL() {
     if (frame->format == AV_PIX_FMT_DRM_PRIME) {
         renderHardwareFrame(frame);
     } else {
-        renderSoftwareFrame(frame); // FIXED: Updated signature call
+        renderSoftwareFrame(frame);
     }
-    
-    // Flush to GPU immediately
-    glFlush();
 }
 
-// FIXED: Rename from flushEGLCache to cleanAllEGLCache
+// cleanAllEGLCache
 void QYuvOpenGLWidget::cleanAllEGLCache() {
     if (!m_eglDestroyImageKHR) return;
 
@@ -240,8 +235,6 @@ void QYuvOpenGLWidget::cleanAllEGLCache() {
         ++it;
     }
     m_eglImageCache.clear();
-    
-    // FIXED: Removed m_cacheRecentUse (LRU logic deleted)
 }
 
 EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier) {
@@ -249,18 +242,24 @@ EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, i
 
     // 1. Cek Cache
     if (m_eglImageCache.contains(key)) {
+        
         EGLImageCacheEntry entry = m_eglImageCache[key];
-        // Validasi Pitch juga
         if (entry.width == width && entry.height == height && entry.pitch == pitch) {
             return entry.image;
-        } else {
-            // Invalid parameters, destroy old
-            m_eglDestroyImageKHR(eglGetCurrentDisplay(), entry.image);
-            m_eglImageCache.remove(key);
         }
+        // Invalid param
+        m_eglDestroyImageKHR(eglGetCurrentDisplay(), entry.image);
+        m_eglImageCache.remove(key);
     }
 
-    // 2. Create New (No Limit Loop Here anymore)
+    // 2. PRUNING
+    while (m_eglImageCache.size() >= 4) {
+        auto it = m_eglImageCache.begin();
+        m_eglDestroyImageKHR(eglGetCurrentDisplay(), it.value().image);
+        m_eglImageCache.erase(it);
+    }
+
+    // 3. Create New
     EGLint attribs[50];
     int i = 0;
     attribs[i++] = EGL_WIDTH; attribs[i++] = width;
@@ -306,7 +305,7 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
 
     const AVDRMObjectDescriptor &objUV = desc->objects[planeUV->object_index];
 
-    // Workaround R8: Use FULL WIDTH for UV plane
+    // Workaround R8
     EGLImageKHR imgY = getCachedEGLImage(objY.fd, planeY->offset, planeY->pitch, 
                                             frame->width, frame->height, objY.format_modifier);
     
