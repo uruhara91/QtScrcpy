@@ -1,5 +1,6 @@
 #include <QDebug>
 #include <QTime>
+#include <QThread>
 
 #include "compat.h"
 #include "demuxer.h"
@@ -116,6 +117,8 @@ void Demuxer::stopDecode()
 
 void Demuxer::run()
 {
+    QThread::currentThread()->setPriority(QThread::TimeCriticalPriority);
+
     m_codecCtx = Q_NULLPTR;
     m_parser = Q_NULLPTR;
     AVPacket *packet = Q_NULLPTR;
