@@ -1,8 +1,6 @@
-#include <QCoreApplication>
-#include <QDebug>
 #include "qyuvopenglwidget.h"
 #include "../../QtScrcpyCore/src/device/decoder/videobuffer.h"
-#include <QSurfaceFormat>
+#include <QDebug>
 
 extern "C" {
 #include <libavutil/frame.h>
@@ -44,7 +42,6 @@ static const char *fragShaderSW = R"(
         yuv.x = texture2D(tex_y, textureOut).r;
         yuv.y = texture2D(tex_u, textureOut).r - 0.5;
         yuv.z = texture2D(tex_v, textureOut).r - 0.5;
-        // BT.601 conversion (Standard for SW decode)
         rgb = mat3(1.0, 1.0, 1.0,
                    0.0, -0.39465, 2.03211,
                    1.13983, -0.58060, 0.0) * yuv;
@@ -85,7 +82,7 @@ static const char *fragShaderHW = R"(
         // Sample Y
         float y = texture2D(tex_y, textureOut).r - offset.x;
         
-        // Sample UV
+        // Sample UV (Manual Split logic for R8 texture)
         float texelSize = 1.0 / width;
         float u_x = (floor(textureOut.x * width * 0.5) * 2.0 + 0.5) * texelSize;
         float v_x = u_x + texelSize;
@@ -103,8 +100,7 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {}
 
 QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     makeCurrent();
-    
-    flushEGLCache(); 
+    cleanAllEGLCache(); // FIXED: Nama fungsi sudah disesuaikan
     deInitTextures();
     m_vao.destroy();
     m_vbo.destroy();
@@ -117,6 +113,9 @@ QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize; }
 void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
     if (m_frameSize != frameSize) {
         m_frameSize = frameSize;
+        // Clean cache karena ukuran buffer pasti berubah saat resize
+        // Kita lakukan nanti di paintGL biar thread safe context-nya, 
+        // tapi updateGeometry perlu dipanggil sekarang.
         updateGeometry();
     }
 }
@@ -150,11 +149,11 @@ void QYuvOpenGLWidget::initializeGL() {
     m_vbo.bind();
     m_vbo.allocate(coordinate, sizeof(coordinate));
     
-    // Vertex Pos (vec3) - Location 0/vertexIn
+    // Vertex Pos (vec3)
     m_programHW.enableAttributeArray("vertexIn");
     m_programHW.setAttributeBuffer("vertexIn", GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
     
-    // Texture Coord (vec2) - Location 1/textureIn
+    // Texture Coord (vec2)
     m_programHW.enableAttributeArray("textureIn");
     m_programHW.setAttributeBuffer("textureIn", GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
 
@@ -165,13 +164,14 @@ void QYuvOpenGLWidget::initializeGL() {
 }
 
 void QYuvOpenGLWidget::initShader() {
-    // Compile shaders
+    // Compile shaders SW
     if (!m_programSW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderSW))
         qCritical() << "SW Vertex Shader Error:" << m_programSW.log();
     if (!m_programSW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderSW))
         qCritical() << "SW Frag Shader Error:" << m_programSW.log();
     m_programSW.link();
 
+    // Compile shaders HW
     if (!m_programHW.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShaderHW))
         qCritical() << "HW Vertex Shader Error:" << m_programHW.log();
     if (!m_programHW.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShaderHW))
@@ -183,8 +183,8 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(4, m_textures);
     for (int i = 0; i < 4; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
@@ -210,24 +210,28 @@ void QYuvOpenGLWidget::paintGL() {
 
     if (!frame) return;
 
+    // Handle Resize
     if (frame->width != m_frameSize.width() || frame->height != m_frameSize.height()) {
         m_frameSize.setWidth(frame->width);
         m_frameSize.setHeight(frame->height);
-        cleanAllEGLCache();
+        cleanAllEGLCache(); // FIXED: Rename sesuai deklarasi
     }
 
+    // --- BIND VAO ---
     QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
 
     if (frame->format == AV_PIX_FMT_DRM_PRIME) {
         renderHardwareFrame(frame);
     } else {
-        renderSoftwareFrame(frame);
+        renderSoftwareFrame(frame); // FIXED: Updated signature call
     }
-
+    
+    // Flush to GPU immediately
     glFlush();
 }
 
-void QYuvOpenGLWidget::flushEGLCache() {
+// FIXED: Rename from flushEGLCache to cleanAllEGLCache
+void QYuvOpenGLWidget::cleanAllEGLCache() {
     if (!m_eglDestroyImageKHR) return;
 
     auto it = m_eglImageCache.begin();
@@ -236,32 +240,32 @@ void QYuvOpenGLWidget::flushEGLCache() {
         ++it;
     }
     m_eglImageCache.clear();
-    m_cacheRecentUse.clear();
+    
+    // FIXED: Removed m_cacheRecentUse (LRU logic deleted)
 }
 
 EGLImageKHR QYuvOpenGLWidget::getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier) {
     QPair<int, int> key = qMakePair(fd, offset);
 
-    // --- 1. CEK CACHE ---
+    // 1. Cek Cache
     if (m_eglImageCache.contains(key)) {
         EGLImageCacheEntry entry = m_eglImageCache[key];
-        
-        // Validation
+        // Validasi Pitch juga
         if (entry.width == width && entry.height == height && entry.pitch == pitch) {
             return entry.image;
+        } else {
+            // Invalid parameters, destroy old
+            m_eglDestroyImageKHR(eglGetCurrentDisplay(), entry.image);
+            m_eglImageCache.remove(key);
         }
-        
-        m_eglDestroyImageKHR(eglGetCurrentDisplay(), entry.image);
-        m_eglImageCache.remove(key);
     }
 
-    // --- 2. CREATE POOL ---
-    
+    // 2. Create New (No Limit Loop Here anymore)
     EGLint attribs[50];
     int i = 0;
     attribs[i++] = EGL_WIDTH; attribs[i++] = width;
     attribs[i++] = EGL_HEIGHT; attribs[i++] = height;
-    attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT; attribs[i++] = DRM_FORMAT_R8; // Format R8 sesuai workaround kamu
+    attribs[i++] = EGL_LINUX_DRM_FOURCC_EXT; attribs[i++] = DRM_FORMAT_R8;
     attribs[i++] = EGL_DMA_BUF_PLANE0_FD_EXT; attribs[i++] = fd;
     attribs[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT; attribs[i++] = offset;
     attribs[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT; attribs[i++] = pitch;
@@ -287,39 +291,37 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *)frame->data[0];
     if (!desc) return;
 
-    // --- Plane Y ---
     const AVDRMPlaneDescriptor *planeY = &desc->layers[0].planes[0];
     const AVDRMObjectDescriptor &objY = desc->objects[planeY->object_index];
     
-    // --- Plane UV ---
     const AVDRMPlaneDescriptor *planeUV = nullptr;
+
     if (desc->nb_layers > 1) {
         planeUV = &desc->layers[1].planes[0];
     } else if (desc->layers[0].nb_planes > 1) {
         planeUV = &desc->layers[0].planes[1];
     }
-    if (!planeUV) return; // Skip kalau bukan format yang diharapkan
+
+    if (!planeUV) return;
+
     const AVDRMObjectDescriptor &objUV = desc->objects[planeUV->object_index];
-    
-    // 1. Plane Y
+
+    // Workaround R8: Use FULL WIDTH for UV plane
     EGLImageKHR imgY = getCachedEGLImage(objY.fd, planeY->offset, planeY->pitch, 
-                                         frame->width, frame->height, objY.format_modifier);
+                                            frame->width, frame->height, objY.format_modifier);
     
-    // 2. Plane UV
     EGLImageKHR imgUV = getCachedEGLImage(objUV.fd, planeUV->offset, planeUV->pitch, 
-                                          frame->width, frame->height / 2, objUV.format_modifier);
+                                            frame->width, frame->height / 2, objUV.format_modifier);
 
     if (imgY == EGL_NO_IMAGE_KHR || imgUV == EGL_NO_IMAGE_KHR) return;
 
     m_programHW.bind();
 
-    // Bind Y -> Texture 0
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, imgY);
     m_programHW.setUniformValue("tex_y", 0);
 
-    // Bind UV -> Texture 1
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     m_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, imgUV);
@@ -328,41 +330,31 @@ void QYuvOpenGLWidget::renderHardwareFrame(const AVFrame *frame) {
     m_programHW.setUniformValue("width", (float)frame->width);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    
     m_programHW.release();
 }
 
-void QYuvOpenGLWidget::cleanAllEGLCache() {
-    if (!m_eglDestroyImageKHR) return;
+// FIXED: Added parameter signature matches .h
+void QYuvOpenGLWidget::renderSoftwareFrame(const AVFrame *frame) {
+    if (!frame) return;
 
-    auto it = m_eglImageCache.begin();
-    while (it != m_eglImageCache.end()) {
-        // Hancurkan object EGL di driver
-        m_eglDestroyImageKHR(eglGetCurrentDisplay(), it.value().image);
-        ++it;
-    }
-
-    m_eglImageCache.clear();
-
-    // qDebug() << "[ZeroCopy] Cache flushed/cleaned.";
+    // Use legacy logic but adapted for AVFrame
+    updateTextures(frame->data[0], frame->data[1], frame->data[2], 
+                   frame->linesize[0], frame->linesize[1], frame->linesize[2]);
 }
 
-void QYuvOpenGLWidget::renderSoftwareFrame() {
+void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV) {
+    
+    // Manual binding shader here (previously called renderSoftwareFrame without args)
     m_programSW.bind();
     m_programSW.setUniformValue("tex_y", 0);
     m_programSW.setUniformValue("tex_u", 1);
     m_programSW.setUniformValue("tex_v", 2);
-}
-
-void QYuvOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV) {
-
-    renderSoftwareFrame();
     
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeY, m_frameSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, dataY);
-
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeU, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataU);
-    
     glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, m_textures[2]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, linesizeV, m_frameSize.height()/2, 0, GL_RED, GL_UNSIGNED_BYTE, dataV);
     
