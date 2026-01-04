@@ -27,7 +27,7 @@
 #include "../QtScrcpyCore/src/device/device.h"
 #include "../QtScrcpyCore/src/device/decoder/decoder.h"
 #include "../QtScrcpyCore/src/device/decoder/videobuffer.h"
-// ---------------------------------------------------
+
 
 VideoForm::VideoForm(bool framelessWindow, bool skin, bool showToolbar, QWidget *parent) : QWidget(parent), ui(new Ui::videoForm), m_skin(skin)
 {
@@ -69,6 +69,11 @@ void VideoForm::initUI()
     }
 
     m_videoWidget = new QYuvOpenGLWidget();
+    
+    // --- RENDERING ---
+    m_videoWidget->setAttribute(Qt::WA_OpaquePaintEvent);
+    m_videoWidget->setAttribute(Qt::WA_NoSystemBackground);
+
     m_videoWidget->hide();
     ui->keepRatioWidget->setWidget(m_videoWidget);
     ui->keepRatioWidget->setWidthHeightRatio(m_widthHeightRatio);
@@ -164,39 +169,45 @@ void VideoForm::updateRender(int width, int height, uint8_t* dataY, uint8_t* dat
     updateShowSize(QSize(width, height));
     m_videoWidget->setFrameSize(QSize(width, height));
 
-    if (dataY == nullptr) {
-        m_videoWidget->update(); 
-    } else {
-        m_videoWidget->updateTextures(dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
-    }
+    // --- OPTIMASI SW PBO PULL ---
+    // Alih-alih mengirim pointer (updateTextures), kita hanya memanggil update().
+    // Widget akan menarik frame sendiri dari VideoBuffer menggunakan PBO.
+    
+    Q_UNUSED(dataY);
+    Q_UNUSED(dataU);
+    Q_UNUSED(dataV);
+    Q_UNUSED(linesizeY);
+    Q_UNUSED(linesizeU);
+    Q_UNUSED(linesizeV);
+
+    m_videoWidget->update(); 
 }
 
 void VideoForm::setSerial(const QString &serial)
 {
     m_serial = serial;
 
-    // --- LOGIKA ZERO COPY ---
+    // --- LOGIKA OPTIMASI SW PBO ---
     // 1. Ambil device interface
     auto deviceInterface = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (!deviceInterface) {
         return;
     }
 
-    // 2. Cast ke implementasi Device (gunakan .data() untuk QPointer)
+    // 2. Cast ke implementasi Device
     qsc::Device* deviceImpl = static_cast<qsc::Device*>(deviceInterface.data());
 
-    // 3. Sambungkan VideoBuffer ke Renderer
+    // 3. Sambungkan VideoBuffer ke Renderer (CRITICAL untuk PBO Pull)
     if (deviceImpl && deviceImpl->decoder()) {
         VideoBuffer* vb = deviceImpl->decoder()->videoBuffer();
         if (vb) {
-            // Kita gunakan m_videoWidget yang sudah diinisialisasi di initUI
             m_videoWidget->setVideoBuffer(vb);
-            qInfo() << "[ZeroCopy] Success: VideoBuffer connected to Renderer for serial:" << serial;
+            qInfo() << "[SW-Opt] Success: VideoBuffer connected to Renderer for serial:" << serial;
         } else {
-            qWarning() << "[ZeroCopy] Failed: VideoBuffer is NULL!";
+            qWarning() << "[SW-Opt] Failed: VideoBuffer is NULL!";
         }
     } else {
-        qWarning() << "[ZeroCopy] Failed: Could not access internal decoder.";
+        qWarning() << "[SW-Opt] Failed: Could not access internal decoder.";
     }
     // ---------------------------------------
 }

@@ -12,19 +12,22 @@ namespace Ui
 }
 
 class ToolForm;
-class FileHandler;
 class QYuvOpenGLWidget;
 class QLabel;
+
 class VideoForm : public QWidget, public qsc::DeviceObserver
 {
     Q_OBJECT
 public:
-    explicit VideoForm(bool framelessWindow = false, bool skin = true, bool showToolBar = true, QWidget *parent = 0);
+    explicit VideoForm(bool framelessWindow = false, bool skin = true, bool showToolBar = true, QWidget *parent = Q_NULLPTR);
     ~VideoForm();
 
     void staysOnTop(bool top = true);
     void updateShowSize(const QSize &newSize);
+    
+    // Legacy support
     void updateRender(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV, int linesizeY, int linesizeU, int linesizeV);
+    
     void setSerial(const QString& serial);
     QRect getGrabCursorRect();
     const QSize &frameSize();
@@ -35,8 +38,10 @@ public:
     bool isHost();
 
 private:
+    // DeviceObserver implementation
     void onFrame(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV,
                  int linesizeY, int linesizeU, int linesizeV) override;
+    
     void updateFPS(quint32 fps) override;
     void grabCursor(bool grab) override;
 
@@ -69,24 +74,21 @@ protected:
     void dropEvent(QDropEvent *event) override;
 
 private:
-    // ui
     Ui::videoForm *ui;
     QPointer<ToolForm> m_toolForm;
     QPointer<QWidget> m_loadingWidget;
     QPointer<QYuvOpenGLWidget> m_videoWidget;
     QPointer<QLabel> m_fpsLabel;
 
-    //inside member
+    // Inside member
+    QString m_serial;
     QSize m_frameSize;
-    QSize m_normalSize;
     QPoint m_dragPosition;
     float m_widthHeightRatio = 0.5f;
     bool m_skin = true;
-    QPoint m_fullScreenBeforePos;
-    QString m_serial;
-
-    //Whether to display the toolbar when connecting a device.
-    bool show_toolbar = true;
+    bool m_showToolbar = true;
+    bool m_isFullScreen = false;
+    bool m_framelessWindow = false;
 };
 
 #endif // VIDEOFORM_H
