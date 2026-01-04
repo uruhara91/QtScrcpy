@@ -132,8 +132,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         ${FFMPEG_STATIC_LIB_DIR}/libswscale.a # Penting untuk SW Convert/Resize
         
         # System Libs
-        pthread # Wajib untuk Threading Decoder
-        dl
+        pthread
         z
     )
     
