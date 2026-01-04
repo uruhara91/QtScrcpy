@@ -37,22 +37,20 @@ void AVFrameConvert::getDstFrameInfo(int &dstWidth, int &dstHeight, AVPixelForma
 
 bool AVFrameConvert::init()
 {
-    if (m_convertCtx) {
-        return true;
+    // Validasi Parameter Dasar
+    if (m_srcWidth <= 0 || m_srcHeight <= 0 || m_srcFormat == AV_PIX_FMT_NONE ||
+        m_dstWidth <= 0 || m_dstHeight <= 0 || m_dstFormat == AV_PIX_FMT_NONE) {
+        return false;
     }
 
-    AVPixelFormat realSrcFormat = m_srcFormat;
+    // Inisialisasi Konversi
+    m_convertCtx = sws_getCachedContext(m_convertCtx,
+                                        m_srcWidth, m_srcHeight, m_srcFormat,
+                                        m_dstWidth, m_dstHeight, m_dstFormat,
+                                        SWS_FAST_BILINEAR, NULL, NULL, NULL);
 
-    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(m_srcFormat);
-    if (desc && (desc->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
-        realSrcFormat = AV_PIX_FMT_NV12;
-    }
-
-    m_convertCtx = sws_getContext(m_srcWidth, m_srcHeight, realSrcFormat,
-                                  m_dstWidth, m_dstHeight, m_dstFormat,
-                                  SWS_BICUBIC, Q_NULLPTR, Q_NULLPTR, Q_NULLPTR);
     if (!m_convertCtx) {
-        qCritical("AVFrameConvert: Failed to initialize sws_context");
+        qCritical("AVFrameConvert: Failed to initialize/cache sws_context");
         return false;
     }
     return true;
@@ -60,7 +58,7 @@ bool AVFrameConvert::init()
 
 bool AVFrameConvert::isInit()
 {
-    return m_convertCtx ? true : false;
+    return m_convertCtx != Q_NULLPTR;
 }
 
 void AVFrameConvert::deInit()
@@ -76,37 +74,15 @@ bool AVFrameConvert::convert(const AVFrame *srcFrame, AVFrame *dstFrame)
     if (!m_convertCtx || !srcFrame || !dstFrame) {
         return false;
     }
-
-    const uint8_t *const *srcData = srcFrame->data;
-    const int *srcLinesize = srcFrame->linesize;
-
-    AVFrame *swFrame = Q_NULLPTR;
-    bool isHwFrame = (srcFrame->format == AV_PIX_FMT_VAAPI || 
-                      srcFrame->format == AV_PIX_FMT_DRM_PRIME);
-
-    if (isHwFrame) {
-        swFrame = av_frame_alloc();
-        if (!swFrame) return false;
-
-        int ret = av_hwframe_transfer_data(swFrame, srcFrame, 0);
-        if (ret < 0) {
-            qCritical("AVFrameConvert: Failed to transfer data from GPU to CPU: %d", ret);
-            av_frame_free(&swFrame);
-            return false;
-        }
-
-        srcData = swFrame->data;
-        srcLinesize = swFrame->linesize;
-    }
-
+    
     int ret = sws_scale(m_convertCtx,
-                        srcData, srcLinesize,
-                        0, m_srcHeight,
+                        srcFrame->data, srcFrame->linesize, 0, m_srcHeight,
                         dstFrame->data, dstFrame->linesize);
 
-    if (swFrame) {
-        av_frame_free(&swFrame);
+    if (ret != m_dstHeight) {
+        qWarning("AVFrameConvert: sws_scale failed or incomplete. Ret: %d, Expected: %d", ret, m_dstHeight);
+        return false;
     }
 
-    return (ret > 0);
+    return true;
 }
