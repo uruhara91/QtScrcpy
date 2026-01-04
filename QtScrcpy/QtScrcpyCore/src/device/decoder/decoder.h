@@ -1,16 +1,17 @@
 #ifndef DECODER_H
 #define DECODER_H
+
 #include <QObject>
+#include <functional>
 
 extern "C"
 {
 #include "libavcodec/avcodec.h"
-#include "libavutil/hwcontext.h"
+#include "libavutil/pixfmt.h"
 }
 
-#include <functional>
-
 class VideoBuffer;
+
 class Decoder : public QObject
 {
     Q_OBJECT
@@ -21,6 +22,7 @@ public:
     bool open();
     void close();
     bool push(const AVPacket *packet);
+ 
     void peekFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame);
 
     VideoBuffer* videoBuffer() const { return m_vb; }
@@ -34,17 +36,15 @@ private slots:
 
 private:
     void pushFrame();
-    bool initHWDecoder(const AVCodec *codec);
 
 private:
     VideoBuffer *m_vb = Q_NULLPTR;
     AVCodecContext *m_codecCtx = Q_NULLPTR;
-    AVBufferRef *m_hwDeviceCtx = Q_NULLPTR;
     
     bool m_isCodecCtxOpen = false;
-    std::function<void(int, int, uint8_t*, uint8_t*, uint8_t*, int, int, int)> m_onFrame = Q_NULLPTR;
-
-    AVFrame *m_tempFrame = nullptr;
+    
+    // Callback UI/Render
+    std::function<void(int, int, uint8_t*, uint8_t*, uint8_t*, int, int, int)> m_onFrame;
 };
 
 #endif // DECODER_H
