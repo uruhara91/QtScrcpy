@@ -6,7 +6,6 @@ extern "C" {
 #include <libavutil/frame.h>
 }
 
-// --- CONSTANTS ---
 #ifndef GL_PIXEL_UNPACK_BUFFER
 #define GL_PIXEL_UNPACK_BUFFER 0x88EC
 #endif
@@ -17,7 +16,6 @@ extern "C" {
 #define GL_WRITE_ONLY 0x88B9
 #endif
 
-// Quad Vertices
 static const GLfloat coordinate[] = {
     -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
      1.0f, -1.0f, 0.0f,   1.0f, 1.0f,
@@ -25,7 +23,6 @@ static const GLfloat coordinate[] = {
      1.0f,  1.0f, 0.0f,   1.0f, 0.0f
 };
 
-// --- SHADERS ---
 static const char *vertShader = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -51,8 +48,6 @@ static const char *fragShader = R"(
         gl_FragColor = vec4(rgb, 1.0);
     }
 )";
-
-// --- IMPLEMENTATION ---
 
 QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {}
 
@@ -82,12 +77,10 @@ void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
 void QYuvOpenGLWidget::initializeGL() {
     initializeOpenGLFunctions();
 
-    // 1. Disable VSync
     QSurfaceFormat format = this->format();
     format.setSwapInterval(0); 
     context()->setFormat(format);
 
-    // 2. Init Resources
     initShader();
     initTextures();
 
@@ -139,7 +132,6 @@ void QYuvOpenGLWidget::initTextures() {
 void QYuvOpenGLWidget::initPBOs(int width, int height) {
     deInitPBOs();
 
-    // Calculate Sizes for YUV420P
     int sizeY = width * height;
     int sizeU = (width / 2) * (height / 2);
     int sizeV = sizeU;
@@ -150,7 +142,6 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
     for (int set = 0; set < 2; set++) {
         for (int plane = 0; plane < 3; plane++) {
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[set][plane]);
-            // Allocate "STREAM_DRAW" memory (CPU Write, GPU Read)
             glBufferData(GL_PIXEL_UNPACK_BUFFER, sizes[plane], NULL, GL_STREAM_DRAW);
         }
     }
@@ -167,7 +158,6 @@ void QYuvOpenGLWidget::deInitTextures() {
 
 void QYuvOpenGLWidget::deInitPBOs() {
     if (QOpenGLFunctions::isInitialized(QOpenGLFunctions::d_ptr)) {
-        // Delete all 6 buffers safely
         if (m_pbos[0][0] != 0) glDeleteBuffers(6, &m_pbos[0][0]);
         memset(m_pbos, 0, sizeof(m_pbos));
     }
@@ -187,7 +177,6 @@ void QYuvOpenGLWidget::paintGL() {
 
     if (!frame) return;
 
-    // Ensure Size & PBOs are correct
     if (frame->width != m_frameSize.width() || frame->height != m_frameSize.height() || !m_pboSizeValid) {
         m_frameSize.setWidth(frame->width);
         m_frameSize.setHeight(frame->height);
@@ -199,9 +188,7 @@ void QYuvOpenGLWidget::paintGL() {
     renderFrame(frame);
 }
 
-// --- SW RENDERER ---
 void QYuvOpenGLWidget::renderFrame(const AVFrame *frame) {
-    // 1. Swap Index
     int nextIndex = (m_pboIndex + 1) % 2;
     int index = nextIndex;
     m_pboIndex = nextIndex;
@@ -209,7 +196,6 @@ void QYuvOpenGLWidget::renderFrame(const AVFrame *frame) {
     int widths[3] = {frame->width, frame->width / 2, frame->width / 2};
     int heights[3] = {frame->height, frame->height / 2, frame->height / 2};
 
-    // 2. Upload Data to PBOs
     for (int i = 0; i < 3; i++) {
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[index][i]);
         
@@ -217,7 +203,6 @@ void QYuvOpenGLWidget::renderFrame(const AVFrame *frame) {
                                                   GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
         
         if (ptr) {
-            // Copy line by line
             uint8_t* src = frame->data[i];
             int linesize = frame->linesize[i];
             int widthBytes = widths[i];
@@ -233,36 +218,28 @@ void QYuvOpenGLWidget::renderFrame(const AVFrame *frame) {
         }
     }
 
-    // 3. Update Textures from PBOs
     m_program.bind();
     
-    // Bind Textures & Update
-    // Y Plane
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_textures[0]);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[index][0]);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, widths[0], heights[0], 0, GL_RED, GL_UNSIGNED_BYTE, 0); // 0 offset = PBO
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, widths[0], heights[0], 0, GL_RED, GL_UNSIGNED_BYTE, 0);
 
-    // U Plane
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, m_textures[1]);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[index][1]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, widths[1], heights[1], 0, GL_RED, GL_UNSIGNED_BYTE, 0);
 
-    // V Plane
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, m_textures[2]);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[index][2]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, widths[2], heights[2], 0, GL_RED, GL_UNSIGNED_BYTE, 0);
 
-    // Unbind PBO
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
-    // 4. Draw
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     
     m_program.release();
 }
 
-// Legacy stub
 void QYuvOpenGLWidget::updateTextures(quint8*, quint8*, quint8*, quint32, quint32, quint32) {}

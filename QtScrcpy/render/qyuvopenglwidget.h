@@ -2,18 +2,17 @@
 #define QYUVOPENGLWIDGET_H
 
 #include <QOpenGLWidget>
-#include <QOpenGLFunctions>
+#include <QOpenGLExtraFunctions>
 #include <QOpenGLBuffer>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 
-// Forward declarations
 class VideoBuffer;
 struct AVFrame;
 
 class QYuvOpenGLWidget
     : public QOpenGLWidget
-    , protected QOpenGLFunctions
+    , protected QOpenGLExtraFunctions
 {
     Q_OBJECT
 public:
@@ -27,6 +26,8 @@ public:
     const QSize &frameSize();
     void setVideoBuffer(VideoBuffer *vb);
 
+    void updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV);
+
 protected:
     void initializeGL() override;
     void paintGL() override;
@@ -35,28 +36,23 @@ protected:
 private:
     void initShader();
     void initTextures();
-    void initPBOs(int width, int height);
     void deInitTextures();
+    
+    void initPBOs(int width, int height);
     void deInitPBOs();
     
-    // Core Rendering Logic
     void renderFrame(const AVFrame *frame);
 
 private:
-    // State Management
     QSize m_frameSize = { -1, -1 };
     VideoBuffer *m_vb = nullptr;
     
-    // OpenGL Resources
     QOpenGLBuffer m_vbo;
     QOpenGLVertexArrayObject m_vao;
     QOpenGLShaderProgram m_program;
 
-    // Textures: 3 (Y, U, V)
     GLuint m_textures[3] = {0, 0, 0}; 
 
-    // PBOs: Double Buffer (2 Sets) x 3 Planes (Y, U, V)
-    // Index 0: Y-Plane, 1: U-Plane, 2: V-Plane
     GLuint m_pbos[2][3] = {{0,0,0}, {0,0,0}};
     int m_pboIndex = 0;
     bool m_pboSizeValid = false;
