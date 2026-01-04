@@ -69,6 +69,8 @@ int main(int argc, char *argv[])
 #endif
 
     QSurfaceFormat varFormat = QSurfaceFormat::defaultFormat();
+    varformat.setDepthBufferSize(0);
+    varformat.setStencilBufferSize(0);
     varFormat.setVersion(2, 0);
     varFormat.setProfile(QSurfaceFormat::NoProfile);
     /*
