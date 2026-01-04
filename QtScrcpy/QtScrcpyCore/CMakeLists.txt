@@ -4,6 +4,8 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
+
+# --- STANDARD SETUP ---
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -28,13 +30,11 @@ else()
     set(QSC_CPU_ARCH x86)
 endif()
 
-# MacOS
+# MacOS Support
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    # mac default arch arm64
     if(NOT CMAKE_OSX_ARCHITECTURES)
         set(CMAKE_OSX_ARCHITECTURES arm64)
     endif()
-
     if (CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
         set(QSC_CPU_ARCH arm64)
     endif()
@@ -43,7 +43,6 @@ endif()
 message(STATUS "[${PROJECT_NAME}] QSC_CPU_ARCH:${QSC_CPU_ARCH}")
 
 # Sources
-# (Otomatis mengambil semua file source, aman)
 file(GLOB_RECURSE QSC_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
@@ -57,20 +56,27 @@ file(GLOB QSC_RCS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.qrc")
 # Add Library
 add_library(${QSC_PROJECT_NAME} STATIC ${QSC_SRCS} ${QSC_RCS})
 
-# Include Directories
+# --- INCLUDE DIRECTORIES (CRITICAL FIX) ---
+# Menambahkan folder sub-modul agar header seperti 'input.h' bisa ditemukan langsung
 target_include_directories(${QSC_PROJECT_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/android
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/controller
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/decoder
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/server
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/demuxer
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/recorder
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/devicemanage
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# --- PLATFORM SPECIFIC DEPENDENCIES (CLEANED UP) ---
+# --- PLATFORM SPECIFIC (CLEAN SW STACK) ---
 
 # Windows
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(FFMPEG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg")
-    target_include_directories(${QSC_PROJECT_NAME} PRIVATE
-        ${FFMPEG_DIR}/include
-    )
+    target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${FFMPEG_DIR}/include)
     target_link_libraries(${QSC_PROJECT_NAME} PRIVATE
         ${FFMPEG_DIR}/lib/${QSC_CPU_ARCH}/avcodec.lib
         ${FFMPEG_DIR}/lib/${QSC_CPU_ARCH}/avformat.lib
@@ -104,7 +110,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         z
         bz2
     )
-    # Copy ADB for Mac logic preserved
+    
     set(QSC_DEPLOY_PATH "${CMAKE_BINARY_DIR}/bin/${CMAKE_CFG_INTDIR}/${QC_PROJECT_NAME}.app/Contents/MacOS")
     add_custom_command(TARGET ${QSC_PROJECT_NAME} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E make_directory "${QSC_DEPLOY_PATH}/MacOS"
@@ -112,33 +118,30 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     )
 endif()
 
-# --- LINUX (OPTIMIZED SW ONLY) ---
+# Linux (THE OPTIMIZED PART)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # HAPUS: pkg_check_modules LIBVA, LIBDRM, EGL (Tidak perlu lagi!)
     
     set(FFMPEG_STATIC_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/lib")
 
-    # Include path (Cuma FFmpeg)
     target_include_directories(${QSC_PROJECT_NAME} PRIVATE 
         ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/include
     )
 
-    # Link libraries (Clean SW Stack)
+    # Link libraries: Hanya yang wajib untuk SW Decode
     target_link_libraries(${QSC_PROJECT_NAME} PRIVATE
-        # FFmpeg Static Libs
+        # FFmpeg Static
         ${FFMPEG_STATIC_LIB_DIR}/libavformat.a
         ${FFMPEG_STATIC_LIB_DIR}/libavcodec.a
         ${FFMPEG_STATIC_LIB_DIR}/libavutil.a
-        ${FFMPEG_STATIC_LIB_DIR}/libswscale.a # Penting untuk SW Convert/Resize
+        ${FFMPEG_STATIC_LIB_DIR}/libswscale.a
         
-        # System Libs
+        # System
         pthread
         z
     )
     
-    # Copy ADB Logic
+    # Copy ADB & Server
     get_target_property(QSC_BIN_OUTPUT_PATH ${QSC_PROJECT_NAME} RUNTIME_OUTPUT_DIRECTORY)
-    # Fallback if property not set
     if (NOT QSC_BIN_OUTPUT_PATH)
         set(QSC_BIN_OUTPUT_PATH ${CMAKE_BINARY_DIR})
     endif()
