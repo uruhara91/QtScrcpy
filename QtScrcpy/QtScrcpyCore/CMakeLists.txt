@@ -30,11 +30,13 @@ else()
     set(QSC_CPU_ARCH x86)
 endif()
 
-# MacOS Support
+# MacOS
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    # mac default arch arm64
     if(NOT CMAKE_OSX_ARCHITECTURES)
         set(CMAKE_OSX_ARCHITECTURES arm64)
     endif()
+
     if (CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
         set(QSC_CPU_ARCH arm64)
     endif()
@@ -42,34 +44,123 @@ endif()
 
 message(STATUS "[${PROJECT_NAME}] QSC_CPU_ARCH:${QSC_CPU_ARCH}")
 
+if(NOT DEFINED QSC_DEPLOY_PATH)
+    message(FATAL_ERROR "-- [QtScrcpyCore] need QSC_DEPLOY_PATH")
+endif()
+
+message("-- [QtScrcpyCore] QSC_DEPLOY_PATH: ${QSC_DEPLOY_PATH}")
+
 # Sources
-file(GLOB_RECURSE QSC_SRCS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
+
+# adb
+set(QSC_ADB_SOURCES
+    src/adb/adbprocessimpl.h
+    src/adb/adbprocessimpl.cpp
+    src/adb/adbprocess.cpp
+)
+source_group(src/adb FILES ${QSC_ADB_SOURCES})
+
+# common
+set(QSC_COMMON_SOURCES
+    src/common/qscrcpyevent.h
+)
+source_group(src/common FILES ${QSC_COMMON_SOURCES})
+
+# include
+set(QSC_INCLUDE_SOURCES
+    include/QtScrcpyCore.h
+    include/QtScrcpyCoreDef.h
+    include/adbprocess.h
+)
+source_group(include FILES ${QSC_INCLUDE_SOURCES})
+
+# device
+set(QSC_DEVICE_SOURCES
+    src/device/device.h
+    src/device/device.cpp
+    src/device/compat.h
+    src/device/android/input.h
+    src/device/android/keycodes.h
+    src/device/controller/controller.h
+    src/device/controller/controller.cpp
+    src/device/controller/bufferutil.h
+    src/device/controller/bufferutil.cpp
+    src/device/controller/inputconvert/inputconvertbase.h
+    src/device/controller/inputconvert/inputconvertbase.cpp
+    src/device/controller/inputconvert/inputconvertnormal.h
+    src/device/controller/inputconvert/inputconvertnormal.cpp
+    src/device/controller/inputconvert/inputconvertgame.h
+    src/device/controller/inputconvert/inputconvertgame.cpp
+    src/device/controller/inputconvert/controlmsg.h
+    src/device/controller/inputconvert/controlmsg.cpp
+    src/device/controller/inputconvert/keymap/keymap.h
+    src/device/controller/inputconvert/keymap/keymap.cpp
+    src/device/controller/receiver/devicemsg.h
+    src/device/controller/receiver/devicemsg.cpp
+    src/device/controller/receiver/receiver.h
+    src/device/controller/receiver/receiver.cpp
+    src/device/decoder/avframeconvert.h
+    src/device/decoder/avframeconvert.cpp
+    src/device/decoder/decoder.h
+    src/device/decoder/decoder.cpp
+    src/device/decoder/fpscounter.h
+    src/device/decoder/fpscounter.cpp
+    src/device/decoder/videobuffer.h
+    src/device/decoder/videobuffer.cpp
+    src/device/filehandler/filehandler.h
+    src/device/filehandler/filehandler.cpp
+    src/device/recorder/recorder.h
+    src/device/recorder/recorder.cpp
+    src/device/server/server.h
+    src/device/server/server.cpp
+    src/device/server/tcpserver.h
+    src/device/server/tcpserver.cpp
+    src/device/server/videosocket.h
+    src/device/server/videosocket.cpp
+    src/device/demuxer/demuxer.h
+    src/device/demuxer/demuxer.cpp
+)
+source_group(src/device FILES ${QSC_DEVICE_SOURCES})
+
+# devicemanage
+set(QSC_DEVICEMANAGE_SOURCES
+    src/devicemanage/devicemanage.h
+    src/devicemanage/devicemanage.cpp
+)
+source_group(src/devicemanage FILES ${QSC_DEVICEMANAGE_SOURCES})
+
+add_library(QtScrcpyCore STATIC
+  ${QSC_ADB_SOURCES}
+  ${QSC_COMMON_SOURCES}
+  ${QSC_INCLUDE_SOURCES}
+  ${QSC_DEVICE_SOURCES}
+  ${QSC_DEVICEMANAGE_SOURCES}
 )
 
-# Resources
-file(GLOB QSC_RCS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.qrc")
-
-# Add Library
-add_library(${QSC_PROJECT_NAME} STATIC ${QSC_SRCS} ${QSC_RCS})
-
-# --- INCLUDE DIRECTORIES (CRITICAL FIX) ---
-# Menambahkan folder sub-modul agar header seperti 'input.h' bisa ditemukan langsung
-target_include_directories(${QSC_PROJECT_NAME} PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/common
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/android
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/controller
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/decoder
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/server
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/demuxer
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/recorder
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/devicemanage
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+target_link_libraries(QtScrcpyCore PRIVATE
+    ${LINK_LIBS}
 )
+
+set_target_properties(${QSC_PROJECT_NAME} PROPERTIES
+    ARCHIVE_OUTPUT_DIRECTORY "${QSC_DEPLOY_PATH}/$<0:>"
+)
+
+target_include_directories(${QSC_PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/adb)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/common)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/filehandler)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/android)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/decoder)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/controller)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/controller/receiver)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/controller/inputconvert)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/controller/inputconvert/keymap)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/server)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/demuxer)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/ui)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/device/recorder)
+target_include_directories(${QSC_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/devicemanage)
 
 # --- PLATFORM SPECIFIC (CLEAN SW STACK) ---
 
