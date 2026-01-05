@@ -20,12 +20,19 @@ static const char *fragShader = R"(
     void main(void) {
         vec3 yuv;
         vec3 rgb;
-        yuv.x = texture2D(tex_y, textureOut).r;
+        
+        // Offset
+        yuv.x = texture2D(tex_y, textureOut).r - 0.0627;
         yuv.y = texture2D(tex_u, textureOut).r - 0.5;
         yuv.z = texture2D(tex_v, textureOut).r - 0.5;
-        rgb = mat3(1.0, 1.0, 1.0, 
-                   0.0, -0.39465, 2.03211, 
-                   1.13983, -0.58060, 0.0) * yuv;
+        
+        // Matrix
+        rgb = mat3(
+            1.164,  1.164,  1.164,
+            0.0,   -0.391,  2.018,
+            1.596, -0.813,  0.0
+        ) * yuv;
+        
         gl_FragColor = vec4(rgb, 1.0);
     }
 )";
@@ -60,13 +67,11 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
 {
     makeCurrent();
 
-    // 1. Inisialisasi PBO
     if (width != m_frameSize.width() || height != m_frameSize.height() || !m_pboSizeValid) {
         setFrameSize(QSize(width, height));
         initPBOs(width, height);
     }
 
-    // 2. Buffering PBO
     int uploadIndex = (m_pboIndex + 1) % 2;
     m_pboIndex = uploadIndex; 
 
@@ -76,11 +81,9 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
     int widths[3] = {width, width / 2, width / 2};
     int heights[3] = {height, height / 2, height / 2};
 
-    // 3. Map PBO dan Copy Data (CPU -> GPU Memory Buffer)
     for (int i = 0; i < 3; i++) {
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[uploadIndex][i]);
-
-        // GL_MAP_INVALIDATE_BUFFER_BIT mencegah CPU menunggu GPU (No Stalling)
+        
         GLubyte* ptr = (GLubyte*)glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, 
                                                   widths[i] * heights[i], 
                                                   GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
@@ -98,8 +101,6 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
     }
     
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-    
-    // Trigger paintGL
     update();
 }
 
@@ -203,7 +204,6 @@ void QYuvOpenGLWidget::resizeGL(int width, int height) {
 void QYuvOpenGLWidget::paintGL() {
     if (!m_pboSizeValid) return;
 
-    // Draw buffer yang baru diisi (m_pboIndex) untuk latency minimal
     int drawIndex = m_pboIndex;
 
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
@@ -226,6 +226,5 @@ void QYuvOpenGLWidget::paintGL() {
     m_program.release();
 }
 
-// Fungsi dummy untuk kompatibilitas
 void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
 void QYuvOpenGLWidget::updateTextures(quint8*, quint8*, quint8*, quint32, quint32, quint32) {}

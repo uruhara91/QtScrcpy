@@ -180,17 +180,17 @@ void VideoForm::setSerial(const QString &serial)
 {
     m_serial = serial;
 
-    // --- LOGIKA OPTIMASI SW PBO ---
+    // --- SW PBO ---
     // 1. Ambil device interface
     auto deviceInterface = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (!deviceInterface) {
         return;
     }
 
-    // 2. Cast ke implementasi Device
+    // 2. Cast
     qsc::Device* deviceImpl = static_cast<qsc::Device*>(deviceInterface.data());
 
-    // 3. Sambungkan VideoBuffer ke Renderer (CRITICAL untuk PBO Pull)
+    // 3. Render
     if (deviceImpl && deviceImpl->decoder()) {
         VideoBuffer* vb = deviceImpl->decoder()->videoBuffer();
         if (vb) {
@@ -202,7 +202,6 @@ void VideoForm::setSerial(const QString &serial)
     } else {
         qWarning() << "[SW-Opt] Failed: Could not access internal decoder.";
     }
-    // ---------------------------------------
 }
 
 void VideoForm::showToolForm(bool show)
