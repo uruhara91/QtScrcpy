@@ -61,7 +61,7 @@ int main(int argc, char *argv[])
 
 #ifdef Q_OS_LINUX
     // Linux CMake Deployment (Everything is in bin/)
-    qputenv("QTSCRCPY_ADB_PATH", (/usr/bin/adb).toLocal8Bit());
+    qputenv("QTSCRCPY_ADB_PATH", QString("/usr/bin/adb").toLocal8Bit());
     qputenv("QTSCRCPY_SERVER_PATH", (appPath + "/scrcpy-server").toLocal8Bit());
     qputenv("QTSCRCPY_KEYMAP_PATH", (appPath + "/keymap").toLocal8Bit());
     qputenv("QTSCRCPY_CONFIG_PATH", (appPath + "/config").toLocal8Bit());
