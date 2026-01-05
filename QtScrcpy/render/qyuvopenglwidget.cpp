@@ -70,6 +70,8 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
     if (width != m_frameSize.width() || height != m_frameSize.height() || !m_pboSizeValid) {
         setFrameSize(QSize(width, height));
         initPBOs(width, height);
+
+        initTextures(width, height);
     }
 
     int uploadIndex = (m_pboIndex + 1) % 2;
@@ -110,7 +112,7 @@ void QYuvOpenGLWidget::initializeGL() {
     context()->setFormat(format);
 
     initShader();
-    initTextures();
+    // initTextures();
 
     static const GLfloat coordinate[] = {
         -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
@@ -150,16 +152,24 @@ void QYuvOpenGLWidget::initShader() {
     m_program.release();
 }
 
-void QYuvOpenGLWidget::initTextures() {
+void QYuvOpenGLWidget::initTextures(int width, int height) {
     if (!m_isInitialized) return;
-    if (m_textures[0] != 0) glDeleteTextures(3, m_textures);
+
+    if (m_textures[0] != 0) {
+        glDeleteTextures(3, m_textures);
+    }
+
     glCreateTextures(GL_TEXTURE_2D, 3, m_textures);
+
+    int widths[3] = {width, width / 2, width / 2};
+    int heights[3] = {height, height / 2, height / 2};
+
     for (int i = 0; i < 3; i++) {
-        glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(m_textures[i], GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTextureParameteri(m_textures[i], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTextureStorage2D(m_textures[i], 1, GL_R8, widths[i], heights[i]);
     }
 }
 

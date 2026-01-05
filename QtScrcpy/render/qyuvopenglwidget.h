@@ -34,7 +34,7 @@ protected:
 
 private:
     void initShader();
-    void initTextures();
+    void initTextures(int width, int height);
     void deInitTextures();
     
     void initPBOs(int width, int height);
