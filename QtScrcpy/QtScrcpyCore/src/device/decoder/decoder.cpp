@@ -196,17 +196,12 @@ void Decoder::onNewFrame()
     if (m_onFrame && frame) {
         AVFrame *final_frame = frame; 
 
-        // --- 1. PHASE COPY (GPU -> RAM) dengan REUSE ---
+        // --- 1. PHASE COPY ---
         if (frame->format == m_hwFormat && m_hwFormat != AV_PIX_FMT_NONE) {
-            av_frame_unref(m_cacheSwFrame);
-
-            if (av_hwframe_transfer_data(m_cacheSwFrame, frame, 0) < 0) {
-                qWarning("HW Transfer failed");
-            } else {
-                // Copy metadata
+            av_frame_unref(m_cacheSwFrame); 
+            if (av_hwframe_transfer_data(m_cacheSwFrame, frame, 0) == 0) {
                 m_cacheSwFrame->width = frame->width;
                 m_cacheSwFrame->height = frame->height;
-
                 final_frame = m_cacheSwFrame; 
             }
         }
@@ -221,14 +216,20 @@ void Decoder::onNewFrame()
             );
             
             if (m_swsCtx) {
-                av_frame_unref(m_cacheConvFrame);
+                if (m_cacheConvFrame->width != final_frame->width ||
+                    m_cacheConvFrame->height != final_frame->height ||
+                    m_cacheConvFrame->format != AV_PIX_FMT_YUV420P ||
+                    !m_cacheConvFrame->data[0]) {
+                    
+                    av_frame_unref(m_cacheConvFrame);
+                    
+                    m_cacheConvFrame->width = final_frame->width;
+                    m_cacheConvFrame->height = final_frame->height;
+                    m_cacheConvFrame->format = AV_PIX_FMT_YUV420P;
+                    av_frame_get_buffer(m_cacheConvFrame, 32);
+                }
 
-                m_cacheConvFrame->width = final_frame->width;
-                m_cacheConvFrame->height = final_frame->height;
-                m_cacheConvFrame->format = AV_PIX_FMT_YUV420P;
-                
-                // Reuse
-                if (av_frame_get_buffer(m_cacheConvFrame, 32) >= 0) {
+                if (m_cacheConvFrame->data[0]) {
                      sws_scale(m_swsCtx, 
                                final_frame->data, final_frame->linesize, 0, final_frame->height,
                                m_cacheConvFrame->data, m_cacheConvFrame->linesize);
@@ -239,7 +240,7 @@ void Decoder::onNewFrame()
         }
 
         // --- 3. PHASE RENDER ---
-        if (final_frame && final_frame->data[0] && final_frame->data[1] && final_frame->data[2]) {
+        if (final_frame && final_frame->data[0]) {
              m_onFrame(final_frame->width, final_frame->height,
                        final_frame->data[0], final_frame->data[1], final_frame->data[2],
                        final_frame->linesize[0], final_frame->linesize[1], final_frame->linesize[2]);
