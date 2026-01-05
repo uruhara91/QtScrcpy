@@ -9,6 +9,7 @@ extern "C"
 #include "libavcodec/avcodec.h"
 #include "libavutil/pixfmt.h"
 #include "libavutil/hwcontext.h"
+#include "libswscale/swscale.h"
 }
 
 class VideoBuffer;
@@ -23,9 +24,7 @@ public:
     bool open();
     void close();
     bool push(const AVPacket *packet);
- 
     void peekFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame);
-
     VideoBuffer* videoBuffer() const { return m_vb; }
 
 signals:
@@ -42,13 +41,12 @@ private:
     VideoBuffer *m_vb = Q_NULLPTR;
     AVCodecContext *m_codecCtx = Q_NULLPTR;
     
-    // HW CONTEXT
+    // DECODE & CONVERSION
     AVBufferRef *m_hwDeviceCtx = Q_NULLPTR;
     enum AVPixelFormat m_hwFormat = AV_PIX_FMT_NONE;
+    struct SwsContext *m_swsCtx = Q_NULLPTR;
     
     bool m_isCodecCtxOpen = false;
-    
-    // Callback UI/Render
     std::function<void(int, int, uint8_t*, uint8_t*, uint8_t*, int, int, int)> m_onFrame;
 };
 

@@ -41,6 +41,8 @@ Decoder::~Decoder() {
 
 bool Decoder::open()
 {
+    m_swsCtx = NULL;
+    
     QThread::currentThread()->setPriority(QThread::TimeCriticalPriority);
 
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
@@ -119,10 +121,13 @@ void Decoder::close()
         avcodec_free_context(&m_codecCtx);
         m_codecCtx = Q_NULLPTR;
     }
-    // Cleanup HW Reference
     if (m_hwDeviceCtx) {
         av_buffer_unref(&m_hwDeviceCtx);
         m_hwDeviceCtx = Q_NULLPTR;
+    }
+    if (m_swsCtx) {
+        sws_freeContext(m_swsCtx);
+        m_swsCtx = Q_NULLPTR;
     }
     m_isCodecCtxOpen = false;
 }
@@ -172,38 +177,64 @@ void Decoder::onNewFrame()
     AVFrame *frame = m_vb->consumeRenderedFrame();
     
     if (m_onFrame && frame) {
+        AVFrame *final_frame = frame;
         AVFrame *sw_frame = NULL;
-        
+        AVFrame *conv_frame = NULL;
+
+        // 1. PHASE COPY
         if (frame->format == m_hwFormat && m_hwFormat != AV_PIX_FMT_NONE) {
-            // HW Frame
             sw_frame = av_frame_alloc();
             if (sw_frame) {
-                // Transfer
                 if (av_hwframe_transfer_data(sw_frame, frame, 0) < 0) {
-                    qWarning("Error transferring HW frame to SW");
+                    qWarning("HW Transfer failed");
                     av_frame_free(&sw_frame);
+                    sw_frame = NULL;
                 } else {
-                    // Copy property
                     sw_frame->width = frame->width;
                     sw_frame->height = frame->height;
+                    final_frame = sw_frame;
                 }
             }
-        } else {
-            // Fallback mode
-            sw_frame = frame;
         }
 
-        // Render
-        if (sw_frame && sw_frame->data[0]) {
-             m_onFrame(sw_frame->width, sw_frame->height,
-                       sw_frame->data[0], sw_frame->data[1], sw_frame->data[2],
-                       sw_frame->linesize[0], sw_frame->linesize[1], sw_frame->linesize[2]);
+        // 2. PHASE CONVERT
+        if (final_frame && final_frame->format != AV_PIX_FMT_YUV420P) {
+            if (!m_swsCtx) {
+                m_swsCtx = sws_getContext(
+                    final_frame->width, final_frame->height, (AVPixelFormat)final_frame->format,
+                    final_frame->width, final_frame->height, AV_PIX_FMT_YUV420P,
+                    SWS_FAST_BILINEAR, NULL, NULL, NULL
+                );
+            }
+            
+            if (m_swsCtx) {
+                conv_frame = av_frame_alloc();
+                conv_frame->width = final_frame->width;
+                conv_frame->height = final_frame->height;
+                conv_frame->format = AV_PIX_FMT_YUV420P;
+                
+                if (av_frame_get_buffer(conv_frame, 32) >= 0) {
+                     sws_scale(m_swsCtx, 
+                               final_frame->data, final_frame->linesize, 0, final_frame->height,
+                               conv_frame->data, conv_frame->linesize);
+
+                     final_frame = conv_frame; 
+                } else {
+                    av_frame_free(&conv_frame);
+                }
+            }
         }
 
-        // Cleanup
-        if (sw_frame && sw_frame != frame) {
-            av_frame_free(&sw_frame);
+        // 3. PHASE RENDER
+        if (final_frame && final_frame->data[0] && final_frame->data[1] && final_frame->data[2]) {
+             m_onFrame(final_frame->width, final_frame->height,
+                       final_frame->data[0], final_frame->data[1], final_frame->data[2],
+                       final_frame->linesize[0], final_frame->linesize[1], final_frame->linesize[2]);
         }
+
+        // 4. CLEANUP
+        if (conv_frame) av_frame_free(&conv_frame);
+        if (sw_frame) av_frame_free(&sw_frame);
     }
     m_vb->unLock();
 }
