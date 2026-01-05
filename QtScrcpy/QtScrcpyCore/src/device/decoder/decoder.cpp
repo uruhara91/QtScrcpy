@@ -191,11 +191,11 @@ void Decoder::onNewFrame()
     if (!m_vb) return;
 
     m_vb->lock();
-    AVFrame *frame = m_vb->consumeRenderedFrame();
+    const AVFrame *frame = m_vb->consumeRenderedFrame();
     m_vb->unLock();
     
     if (m_onFrame && frame) {
-        AVFrame *final_frame = frame; 
+        const AVFrame *final_frame = frame;
 
         // --- 1. PHASE COPY ---
         if (frame->format == m_hwFormat && m_hwFormat != AV_PIX_FMT_NONE) {
@@ -243,12 +243,10 @@ void Decoder::onNewFrame()
         // --- 3. PHASE RENDER ---
         if (final_frame && final_frame->data[0]) {
              m_onFrame(final_frame->width, final_frame->height,
-                       final_frame->data[0], final_frame->data[1], final_frame->data[2],
+                       const_cast<uint8_t*>(final_frame->data[0]), 
+                       const_cast<uint8_t*>(final_frame->data[1]), 
+                       const_cast<uint8_t*>(final_frame->data[2]),
                        final_frame->linesize[0], final_frame->linesize[1], final_frame->linesize[2]);
         }
-    }
-
-    if (frame) {
-        av_frame_free(&frame);
     }
 }
