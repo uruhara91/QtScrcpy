@@ -12,6 +12,7 @@ namespace Ui
 }
 
 class ToolForm;
+class FileHandler;
 class QYuvOpenGLWidget;
 class QLabel;
 
@@ -41,7 +42,6 @@ private:
     // DeviceObserver implementation
     void onFrame(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV,
                  int linesizeY, int linesizeU, int linesizeV) override;
-    
     void updateFPS(quint32 fps) override;
     void grabCursor(bool grab) override;
 
@@ -74,21 +74,25 @@ protected:
     void dropEvent(QDropEvent *event) override;
 
 private:
+    // UI Pointers
     Ui::videoForm *ui;
     QPointer<ToolForm> m_toolForm;
     QPointer<QWidget> m_loadingWidget;
     QPointer<QYuvOpenGLWidget> m_videoWidget;
     QPointer<QLabel> m_fpsLabel;
 
-    // Inside member
-    QString m_serial;
+    // --- State Members ---
     QSize m_frameSize;
+    QSize m_normalSize;
     QPoint m_dragPosition;
     float m_widthHeightRatio = 0.5f;
     bool m_skin = true;
-    bool m_showToolbar = true;
+    QPoint m_fullScreenBeforePos;
+    QString m_serial;
+
+    bool show_toolbar = true; 
     bool m_isFullScreen = false;
-    bool m_framelessWindow = false;
+    bool m_framelessWindow = false; 
 };
 
 #endif // VIDEOFORM_H
