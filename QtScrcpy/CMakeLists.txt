@@ -366,30 +366,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/sndcpy/soundservice.apk" "${QSC_BIN_OUTPUT_PATH}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/QtScrcpyCore/src/third_party/scrcpy-server" "${QSC_BIN_OUTPUT_PATH}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/QtScrcpyCore/src/third_party/adb/linux/adb" "${QSC_BIN_OUTPUT_PATH}"
     )
 
     set(THREADS_PREFER_PTHREAD_FLAG ON)
     find_package(Threads REQUIRED)
-    find_package(mimalloc REQUIRED)
+    
+    # Optional: mimalloc support
+    find_package(mimalloc QUIET)
 
     target_link_libraries(${PROJECT_NAME} PRIVATE
         # xcb https://doc.qt.io/qt-5/linux-requirements.html
         xcb
         Threads::Threads
     )
+    
+    if(mimalloc_FOUND)
+        target_link_libraries(${PROJECT_NAME} PRIVATE mimalloc)
+    endif()
 
     # linux set app icon: https://blog.csdn.net/MrNoboday/article/details/82870853
 endif()
-
-#
-# common deps
-#
-
-add_subdirectory(QtScrcpyCore)
-
-# Qt
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    ${LINK_LIBS}
-    QtScrcpyCore
-    mimalloc
-)
