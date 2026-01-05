@@ -38,6 +38,8 @@ private:
     void pushFrame();
 
 private:
+    AVFrame *m_cacheSwFrame = Q_NULLPTR;
+    AVFrame *m_cacheConvFrame = Q_NULLPTR;
     VideoBuffer *m_vb = Q_NULLPTR;
     AVCodecContext *m_codecCtx = Q_NULLPTR;
     

@@ -42,6 +42,8 @@ Decoder::~Decoder() {
 bool Decoder::open()
 {
     m_swsCtx = NULL;
+    m_cacheSwFrame = av_frame_alloc();
+    m_cacheConvFrame = av_frame_alloc();
 
     QThread::currentThread()->setPriority(QThread::TimeCriticalPriority);
 
@@ -130,6 +132,8 @@ void Decoder::close()
         m_swsCtx = Q_NULLPTR;
     }
     m_isCodecCtxOpen = false;
+    if (m_cacheSwFrame) av_frame_free(&m_cacheSwFrame);
+    if (m_cacheConvFrame) av_frame_free(&m_cacheConvFrame);
 }
 
 bool Decoder::push(const AVPacket *packet)
