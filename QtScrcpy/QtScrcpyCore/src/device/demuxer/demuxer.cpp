@@ -117,7 +117,7 @@ void Demuxer::stopDecode()
 
 void Demuxer::run()
 {
-    QThread::currentThread()->setPriority(QThread::TimeCriticalPriority);
+    QThread::currentThread()->setPriority(QThread::HighestPriority);
 
     m_codecCtx = Q_NULLPTR;
     m_parser = Q_NULLPTR;
