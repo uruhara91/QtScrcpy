@@ -3,9 +3,10 @@
 #include <QOpenGLFunctions>
 
 static const char *vertShader = R"(
-    attribute vec3 vertexIn;
-    attribute vec2 textureIn;
-    varying vec2 textureOut;
+    #version 460 core
+    layout(location = 0) in vec3 vertexIn;
+    layout(location = 1) in vec2 textureIn;
+    out vec2 textureOut;
     void main(void) {
         gl_Position = vec4(vertexIn, 1.0);
         textureOut = textureIn;
@@ -13,27 +14,29 @@ static const char *vertShader = R"(
 )";
 
 static const char *fragShader = R"(
-    varying vec2 textureOut;
-    uniform sampler2D tex_y;
-    uniform sampler2D tex_u;
-    uniform sampler2D tex_v;
+    in vec2 textureOut;
+    out vec4 FragColor;
+
+    // Binding
+    layout(binding = 0) uniform sampler2D tex_y;
+    layout(binding = 1) uniform sampler2D tex_u;
+    layout(binding = 2) uniform sampler2D tex_v;
+
     void main(void) {
         vec3 yuv;
         vec3 rgb;
         
-        // Offset
-        yuv.x = texture2D(tex_y, textureOut).r - 0.0627;
-        yuv.y = texture2D(tex_u, textureOut).r - 0.5;
-        yuv.z = texture2D(tex_v, textureOut).r - 0.5;
+        yuv.x = texture(tex_y, textureOut).r - 0.0627; // texture2D -> texture
+        yuv.y = texture(tex_u, textureOut).r - 0.5;
+        yuv.z = texture(tex_v, textureOut).r - 0.5;
         
-        // Matrix
         rgb = mat3(
             1.164,  1.164,  1.164,
             0.0,   -0.391,  2.018,
             1.596, -0.813,  0.0
         ) * yuv;
         
-        gl_FragColor = vec4(rgb, 1.0);
+        FragColor = vec4(rgb, 1.0);
     }
 )";
 
@@ -77,14 +80,11 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
 
     uint8_t* srcData[3] = {dataY, dataU, dataV};
     int srcLinesizes[3] = {linesizeY, linesizeU, linesizeV};
-    
     int widths[3] = {width, width / 2, width / 2};
     int heights[3] = {height, height / 2, height / 2};
 
     for (int i = 0; i < 3; i++) {
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[uploadIndex][i]);
-        
-        GLubyte* ptr = (GLubyte*)glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, 
+        void* ptr = glMapNamedBufferRange(m_pbos[uploadIndex][i], 0, 
                                           widths[i] * heights[i], 
                                           GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
         
@@ -99,7 +99,6 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
             glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
         }
     }
-    
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     update();
 }
@@ -171,12 +170,12 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
     int sizeV = sizeU;
     int sizes[3] = {sizeY, sizeU, sizeV};
 
-    glGenBuffers(6, &m_pbos[0][0]);
+    glCreateBuffers(6, &m_pbos[0][0]); 
 
     for (int set = 0; set < 2; set++) {
         for (int plane = 0; plane < 3; plane++) {
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[set][plane]);
-            glBufferData(GL_PIXEL_UNPACK_BUFFER, sizes[plane], NULL, GL_STREAM_DRAW);
+            glNamedBufferStorage(m_pbos[set][plane], sizes[plane], nullptr, 
+                                 GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
         }
     }
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -205,7 +204,6 @@ void QYuvOpenGLWidget::paintGL() {
     if (!m_pboSizeValid) return;
 
     int drawIndex = m_pboIndex;
-
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
     int heights[3] = {m_frameSize.height(), m_frameSize.height() / 2, m_frameSize.height() / 2};
 
@@ -216,13 +214,11 @@ void QYuvOpenGLWidget::paintGL() {
         glActiveTexture(GL_TEXTURE0 + i);
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
-        
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, widths[i], heights[i], 0, GL_RED, GL_UNSIGNED_BYTE, 0);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
     }
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    
     m_program.release();
 }
 

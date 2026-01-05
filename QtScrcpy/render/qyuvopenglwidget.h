@@ -2,7 +2,7 @@
 #define QYUVOPENGLWIDGET_H
 
 #include <QOpenGLWidget>
-#include <QOpenGLExtraFunctions>
+#include <QOpenGLFunctions_4_6_Core>
 #include <QOpenGLBuffer>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
@@ -10,9 +10,7 @@
 class VideoBuffer;
 struct AVFrame;
 
-class QYuvOpenGLWidget
-    : public QOpenGLWidget
-    , protected QOpenGLExtraFunctions
+class QYuvOpenGLWidget : public QOpenGLWidget, protected QOpenGLFunctions_4_6_Core
 {
     Q_OBJECT
 public:

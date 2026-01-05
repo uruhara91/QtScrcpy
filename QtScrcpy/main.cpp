@@ -29,7 +29,6 @@ QtMsgType covertLogLevel(const QString &logLevel);
 int main(int argc, char *argv[])
 {
     // 1. SETUP PATHS (Robust & Relative)
-    // Menggunakan path relatif terhadap executable agar portable (sesuai output CMake)
     QString appPath = QCoreApplication::applicationDirPath();
 
 #ifdef Q_OS_WIN32
@@ -70,24 +69,16 @@ int main(int argc, char *argv[])
     g_msgType = covertLogLevel(Config::getInstance().getLogLevel());
 
     // 2. OPENGL CONFIGURATION (CRITICAL FOR PBO)
-    // Setup Global OpenGL Format sebelum QApplication dibuat
     QSurfaceFormat varFormat = QSurfaceFormat::defaultFormat();
-    
-    // Optimization: Disable Depth & Stencil (We only draw 2D Video)
     varFormat.setDepthBufferSize(0);
     varFormat.setStencilBufferSize(0);
-    
-    // Modern OpenGL: Request 3.3 Core Profile
-    // Ini WAJIB agar QOpenGLExtraFunctions (PBO, glMapBufferRange) bekerja
-    varFormat.setVersion(3, 3); 
+    varFormat.setVersion(4, 6); 
     varFormat.setProfile(QSurfaceFormat::CoreProfile);
-    
-    // Performance: Disable VSync (Low Latency)
     varFormat.setSwapInterval(0); 
     
     QSurfaceFormat::setDefaultFormat(varFormat);
 
-    // 3. HIGH DPI SCALING (QT5 COMPAT)
+    // 3. HIGH DPI SCALING
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     #if (QT_VERSION >= QT_VERSION_CHECK(5,14,0))
