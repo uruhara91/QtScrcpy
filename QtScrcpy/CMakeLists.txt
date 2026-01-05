@@ -40,7 +40,7 @@ message(STATUS "[${PROJECT_NAME}] CPU_ARCH:${QC_CPU_ARCH}")
 
 # CMake set
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # default RelWithDebInfo
@@ -85,7 +85,7 @@ if (NOT MSVC)
     add_compile_options(-Wall -Wextra -pedantic -Werror)
 
     # disable some warning
-    add_compile_options(-Wno-nested-anon-types -Wno-c++17-extensions -Wno-overloaded-virtual)
+    add_compile_options(-Wno-nested-anon-types -Wno-c++23-extensions -Wno-overloaded-virtual)
 endif()
 
 #
