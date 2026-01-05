@@ -2,42 +2,41 @@
 #include <QDebug>
 #include <QOpenGLFunctions>
 
-static const char *vertShader = R"(
-    #version 450 core
-    layout(location = 0) in vec3 vertexIn;
-    layout(location = 1) in vec2 textureIn;
-    out vec2 textureOut;
-    void main(void) {
-        gl_Position = vec4(vertexIn, 1.0);
-        textureOut = textureIn;
-    }
+static const char *vertShader = R"(#version 450 core
+layout(location = 0) in vec3 vertexIn;
+layout(location = 1) in vec2 textureIn;
+out vec2 textureOut;
+void main(void) {
+    gl_Position = vec4(vertexIn, 1.0);
+    textureOut = textureIn;
+}
 )";
 
-static const char *fragShader = R"(
-    in vec2 textureOut;
-    out vec4 FragColor;
+static const char *fragShader = R"(#version 450 core
+in vec2 textureOut;
+out vec4 FragColor;
 
-    // Binding
-    layout(binding = 0) uniform sampler2D tex_y;
-    layout(binding = 1) uniform sampler2D tex_u;
-    layout(binding = 2) uniform sampler2D tex_v;
+// Binding
+layout(binding = 0) uniform sampler2D tex_y;
+layout(binding = 1) uniform sampler2D tex_u;
+layout(binding = 2) uniform sampler2D tex_v;
 
-    void main(void) {
-        vec3 yuv;
-        vec3 rgb;
-        
-        yuv.x = texture(tex_y, textureOut).r - 0.0627; // texture2D -> texture
-        yuv.y = texture(tex_u, textureOut).r - 0.5;
-        yuv.z = texture(tex_v, textureOut).r - 0.5;
-        
-        rgb = mat3(
-            1.164,  1.164,  1.164,
-            0.0,   -0.391,  2.018,
-            1.596, -0.813,  0.0
-        ) * yuv;
-        
-        FragColor = vec4(rgb, 1.0);
-    }
+void main(void) {
+    vec3 yuv;
+    vec3 rgb;
+    
+    yuv.x = texture(tex_y, textureOut).r - 0.0627;
+    yuv.y = texture(tex_u, textureOut).r - 0.5;
+    yuv.z = texture(tex_v, textureOut).r - 0.5;
+    
+    rgb = mat3(
+        1.164,  1.164,  1.164,
+        0.0,   -0.391,  2.018,
+        1.596, -0.813,  0.0
+    ) * yuv;
+    
+    FragColor = vec4(rgb, 1.0);
+}
 )";
 
 QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {}
