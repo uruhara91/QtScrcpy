@@ -247,8 +247,4 @@ void Decoder::onNewFrame()
                        final_frame->linesize[0], final_frame->linesize[1], final_frame->linesize[2]);
         }
     }
-
-    if (frame) {
-        av_frame_free(&frame);
-    }
 }
