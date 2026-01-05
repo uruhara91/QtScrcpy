@@ -48,7 +48,7 @@ QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     if (m_vao.isCreated()) m_vao.destroy();
     if (m_vbo.isCreated()) m_vbo.destroy();
     doneCurrent();
-}
+}   
 
 QSize QYuvOpenGLWidget::minimumSizeHint() const { return QSize(50, 50); }
 QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize; }
@@ -98,7 +98,12 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
 }
 
 void QYuvOpenGLWidget::initializeGL() {
-    initializeOpenGLFunctions();
+    if (initializeOpenGLFunctions()) {
+        m_isInitialized = true;
+    } else {
+        qCritical() << "Initialize OpenGL Functions failed!";
+        return;
+    }
     
     QSurfaceFormat format = this->format();
     format.setSwapInterval(0);
@@ -146,7 +151,9 @@ void QYuvOpenGLWidget::initShader() {
 }
 
 void QYuvOpenGLWidget::initTextures() {
-    glGenTextures(3, m_textures);
+    if (!m_isInitialized) return;
+    if (m_textures[0] != 0) glDeleteTextures(3, m_textures);
+    glCreateTextures(GL_TEXTURE_2D, 3, m_textures);
     for (int i = 0; i < 3; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -157,7 +164,7 @@ void QYuvOpenGLWidget::initTextures() {
 }
 
 void QYuvOpenGLWidget::initPBOs(int width, int height) {
-    deInitPBOs(); // Pastikan unmap & delete buffer lama dulu
+    deInitPBOs();
     
     int sizes[3] = {
         width * height,             // Y
@@ -180,15 +187,25 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
 }
 
 void QYuvOpenGLWidget::deInitTextures() {
-    if (QOpenGLFunctions::isInitialized(QOpenGLFunctions::d_ptr)) {
+    if (!m_isInitialized) return;
+
+    if (m_textures[0] != 0) {
         glDeleteTextures(3, m_textures);
+        memset(m_textures, 0, sizeof(m_textures));
     }
 }
 
 void QYuvOpenGLWidget::deInitPBOs() {
-    if (QOpenGLFunctions::isInitialized(QOpenGLFunctions::d_ptr)) {
-        if (m_pbos[0][0] != 0) glDeleteBuffers(6, &m_pbos[0][0]);
-        memset(m_pbos, 0, sizeof(m_pbos));
+    if (!m_isInitialized) return;
+    for (int set = 0; set < 2; set++) {
+        for (int plane = 0; plane < 3; plane++) {
+            if (m_pbos[set][plane] != 0) {
+                glUnmapNamedBuffer(m_pbos[set][plane]); 
+                glDeleteBuffers(1, &m_pbos[set][plane]);
+                m_pbos[set][plane] = 0;
+                m_pboMappedPtrs[set][plane] = nullptr;
+            }
+        }
     }
     m_pboSizeValid = false;
 }

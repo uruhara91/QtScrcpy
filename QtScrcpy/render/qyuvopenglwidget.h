@@ -7,8 +7,6 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 
-void* m_pboMappedPtrs[2][3];
-
 class VideoBuffer;
 struct AVFrame;
 
@@ -55,8 +53,12 @@ private:
     GLuint m_textures[3] = {0, 0, 0}; 
 
     GLuint m_pbos[2][3] = {{0,0,0}, {0,0,0}};
+    void* m_pboMappedPtrs[2][3] = {{nullptr, nullptr, nullptr}, {nullptr, nullptr, nullptr}};
+    
     int m_pboIndex = 0;
     bool m_pboSizeValid = false;
+
+    bool m_isInitialized = false;
 };
 
 #endif // QYUVOPENGLWIDGET_H
