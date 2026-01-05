@@ -2,7 +2,6 @@
 #include <QDebug>
 #include <QOpenGLFunctions>
 
-// Matrix konversi BT.601 (Standard Android)
 static const char *vertShader = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -45,36 +44,35 @@ QYuvOpenGLWidget::~QYuvOpenGLWidget() {
 QSize QYuvOpenGLWidget::minimumSizeHint() const { return QSize(50, 50); }
 QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize; }
 
+const QSize &QYuvOpenGLWidget::frameSize() { 
+    return m_frameSize; 
+}
+
 void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
     if (m_frameSize != frameSize) {
         m_frameSize = frameSize;
         updateGeometry();
-        m_pboSizeValid = false; // Trigger re-init PBO jika ukuran berubah
+        m_pboSizeValid = false;
     }
 }
 
-// --- FUNGSI BARU: Menerima data dari VideoForm & Copy ke PBO ---
 void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8_t *dataU, uint8_t *dataV, int linesizeY, int linesizeU, int linesizeV)
 {
-    // Kita perlu konteks OpenGL aktif untuk memanipulasi PBO
     makeCurrent();
 
-    // 1. Inisialisasi PBO jika ukuran berubah atau belum ada
+    // 1. Inisialisasi PBO
     if (width != m_frameSize.width() || height != m_frameSize.height() || !m_pboSizeValid) {
         setFrameSize(QSize(width, height));
         initPBOs(width, height);
     }
 
-    // 2. Teknik Double Buffering PBO (Ping-Pong)
-    // index digunakan untuk upload (CPU write), nextIndex digunakan untuk draw (GPU read)
+    // 2. Buffering PBO
     int uploadIndex = (m_pboIndex + 1) % 2;
     m_pboIndex = uploadIndex; 
 
-    // Data source array
     uint8_t* srcData[3] = {dataY, dataU, dataV};
     int srcLinesizes[3] = {linesizeY, linesizeU, linesizeV};
     
-    // Ukuran Plane
     int widths[3] = {width, width / 2, width / 2};
     int heights[3] = {height, height / 2, height / 2};
 
@@ -82,41 +80,34 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
     for (int i = 0; i < 3; i++) {
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[uploadIndex][i]);
 
-        // GL_MAP_INVALIDATE_BUFFER_BIT sangat penting untuk performa (Orphaning)
-        // Ini memberitahu driver "buang data lama, beri saya memori baru", mencegah CPU menunggu GPU.
+        // GL_MAP_INVALIDATE_BUFFER_BIT mencegah CPU menunggu GPU (No Stalling)
         GLubyte* ptr = (GLubyte*)glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, 
                                                   widths[i] * heights[i], 
                                                   GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
         
         if (ptr) {
             if (srcLinesizes[i] == widths[i]) {
-                // Jalur cepat jika linesize pas (tanpa padding)
                 memcpy(ptr, srcData[i], widths[i] * heights[i]);
             } else {
-                // Copy per baris jika ada padding (umum di FFmpeg)
                 for (int h = 0; h < heights[i]; h++) {
                     memcpy(ptr + h * widths[i], srcData[i] + h * srcLinesizes[i], widths[i]);
                 }
             }
             glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
-        } else {
-             qWarning() << "Failed to map PBO buffer!";
         }
     }
     
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     
-    // Trigger paintGL untuk menggambar
+    // Trigger paintGL
     update();
 }
 
 void QYuvOpenGLWidget::initializeGL() {
     initializeOpenGLFunctions();
     
-    // Disable VSync agar FPS game tidak terlimit refresh rate monitor (opsional, bagus untuk latency)
-    // Atau set 1 untuk smooth tanpa tearing.
     QSurfaceFormat format = this->format();
-    format.setSwapInterval(0); 
+    format.setSwapInterval(0);
     context()->setFormat(format);
 
     initShader();
@@ -164,7 +155,7 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(3, m_textures);
     for (int i = 0; i < 3; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); // Linear lebih halus untuk game
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -179,13 +170,11 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
     int sizeV = sizeU;
     int sizes[3] = {sizeY, sizeU, sizeV};
 
-    // Alokasi 2 set PBO (6 buffer total)
     glGenBuffers(6, &m_pbos[0][0]);
 
     for (int set = 0; set < 2; set++) {
         for (int plane = 0; plane < 3; plane++) {
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[set][plane]);
-            // GL_STREAM_DRAW: Data di-upload sekali, digambar beberapa kali (cocok untuk video)
             glBufferData(GL_PIXEL_UNPACK_BUFFER, sizes[plane], NULL, GL_STREAM_DRAW);
         }
     }
@@ -214,9 +203,7 @@ void QYuvOpenGLWidget::resizeGL(int width, int height) {
 void QYuvOpenGLWidget::paintGL() {
     if (!m_pboSizeValid) return;
 
-    // Gunakan PBO yang sudah diisi di setFrameData (m_pboIndex adalah buffer yang baru diisi)
-    // Idealnya untuk double buffering murni: draw buffer yang LAMA, write buffer yang BARU.
-    // Tapi untuk latensi terendah (gaming), kita draw buffer yang BARU saja (m_pboIndex).
+    // Draw buffer yang baru diisi (m_pboIndex) untuk latency minimal
     int drawIndex = m_pboIndex;
 
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
@@ -230,7 +217,6 @@ void QYuvOpenGLWidget::paintGL() {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
         
-        // Update texture dari PBO (Sangat Cepat di GPU)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, widths[i], heights[i], 0, GL_RED, GL_UNSIGNED_BYTE, 0);
     }
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -240,6 +226,6 @@ void QYuvOpenGLWidget::paintGL() {
     m_program.release();
 }
 
-// Fungsi dummy agar kompatibel jika ada panggilan lama
+// Fungsi dummy untuk kompatibilitas
 void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
 void QYuvOpenGLWidget::updateTextures(quint8*, quint8*, quint8*, quint32, quint32, quint32) {}
