@@ -42,7 +42,7 @@ Decoder::~Decoder() {
 bool Decoder::open()
 {
     m_swsCtx = NULL;
-    
+
     QThread::currentThread()->setPriority(QThread::TimeCriticalPriority);
 
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
@@ -200,7 +200,8 @@ void Decoder::onNewFrame()
         // 2. PHASE CONVERT
         if (final_frame && final_frame->format != AV_PIX_FMT_YUV420P) {
             if (!m_swsCtx) {
-                m_swsCtx = sws_getContext(
+                m_swsCtx = sws_getCachedContext(
+                    m_swsCtx,
                     final_frame->width, final_frame->height, (AVPixelFormat)final_frame->format,
                     final_frame->width, final_frame->height, AV_PIX_FMT_YUV420P,
                     SWS_FAST_BILINEAR, NULL, NULL, NULL
