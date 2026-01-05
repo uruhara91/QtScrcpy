@@ -85,8 +85,8 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[uploadIndex][i]);
         
         GLubyte* ptr = (GLubyte*)glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, 
-                                                  widths[i] * heights[i], 
-                                                  GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+                                          widths[i] * heights[i], 
+                                          GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
         
         if (ptr) {
             if (srcLinesizes[i] == widths[i]) {
