@@ -192,6 +192,7 @@ void Decoder::onNewFrame()
 
     m_vb->lock();
     AVFrame *frame = m_vb->consumeRenderedFrame();
+    m_vb->unLock();
     
     if (m_onFrame && frame) {
         AVFrame *final_frame = frame; 
@@ -250,6 +251,4 @@ void Decoder::onNewFrame()
     if (frame) {
         av_frame_free(&frame);
     }
-
-    m_vb->unLock();
 }
