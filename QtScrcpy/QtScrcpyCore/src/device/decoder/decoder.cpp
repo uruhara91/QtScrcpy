@@ -4,6 +4,22 @@
 #include "decoder.h"
 #include "videobuffer.h"
 
+// Callback static
+static enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts)
+{
+    const enum AVPixelFormat *p;
+    enum AVPixelFormat target = *static_cast<enum AVPixelFormat*>(ctx->opaque);
+
+    for (p = pix_fmts; *p != -1; p++) {
+        if (*p == target) {
+            return *p;
+        }
+    }
+    
+    qWarning("Failed to get HW surface format. Fallback to SW.");
+    return AV_PIX_FMT_NONE;
+}
+
 Decoder::Decoder(std::function<void(int, int, uint8_t*, uint8_t*, uint8_t*, int, int, int)> onFrame, QObject *parent)
     : QObject(parent)
     , m_vb(new VideoBuffer())
@@ -33,18 +49,58 @@ bool Decoder::open()
         return false;
     }
 
+    // 1. Hardware Init
+    enum AVHWDeviceType type = AV_HWDEVICE_TYPE_NONE;
+#if defined(Q_OS_WIN)
+    type = AV_HWDEVICE_TYPE_D3D11VA;
+    qInfo("Selecting D3D11VA for Windows");
+#elif defined(Q_OS_LINUX)
+    type = AV_HWDEVICE_TYPE_VAAPI;
+    qInfo("Selecting VAAPI for Linux");
+#endif
+
+    // 2. Inisialisasi Hardware
+    int err = 0;
+    if (type != AV_HWDEVICE_TYPE_NONE) {
+        err = av_hwdevice_ctx_create(&m_hwDeviceCtx, type, NULL, NULL, 0);
+        if (err < 0) {
+            qWarning("Failed to create HW device. Error code: %d. Fallback to SW Decode.", err);
+        } else {
+            if (type == AV_HWDEVICE_TYPE_VAAPI) m_hwFormat = AV_PIX_FMT_VAAPI;
+            else if (type == AV_HWDEVICE_TYPE_D3D11VA) m_hwFormat = AV_PIX_FMT_D3D11;
+            else if (type == AV_HWDEVICE_TYPE_DXVA2) m_hwFormat = AV_PIX_FMT_DXVA2_VLD;
+            
+            qInfo("HW Device created successfully.");
+        }
+    }
+
+    // 3. Alokasi Context
     m_codecCtx = avcodec_alloc_context3(codec);
     if (!m_codecCtx) {
         qCritical("Could not allocate decoder context");
         return false;
     }
 
+    // 4. Attach HW Context
+    if (m_hwDeviceCtx) {
+        m_codecCtx->hw_device_ctx = av_buffer_ref(m_hwDeviceCtx);
+        m_codecCtx->opaque = &m_hwFormat; 
+        m_codecCtx->get_format = get_hw_format;
+    }
+
+    // 5. Optimasi
     m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
     m_codecCtx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
     m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
     m_codecCtx->skip_loop_filter = AVDISCARD_NONREF;
-    m_codecCtx->thread_type = FF_THREAD_SLICE;
-    m_codecCtx->thread_count = 0; 
+
+    // Threading
+    if (m_hwDeviceCtx) {
+        m_codecCtx->thread_count = 1;
+    } else {
+        m_codecCtx->thread_type = FF_THREAD_SLICE;
+        m_codecCtx->thread_count = 0;
+    }
 
     // Open Codec
     if (avcodec_open2(m_codecCtx, codec, NULL) < 0) {
@@ -53,7 +109,7 @@ bool Decoder::open()
     }
     
     m_isCodecCtxOpen = true;
-    qInfo("SW Decoder initialized. Threads: %d, Type: Slice", m_codecCtx->thread_count);
+    qInfo("Decoder initialized. HW Accel: %s", m_hwDeviceCtx ? "ENABLED (Copy Mode)" : "DISABLED (SW Mode)");
     return true;
 }
 
@@ -63,18 +119,21 @@ void Decoder::close()
         avcodec_free_context(&m_codecCtx);
         m_codecCtx = Q_NULLPTR;
     }
+    // Cleanup HW Reference
+    if (m_hwDeviceCtx) {
+        av_buffer_unref(&m_hwDeviceCtx);
+        m_hwDeviceCtx = Q_NULLPTR;
+    }
     m_isCodecCtxOpen = false;
 }
 
 bool Decoder::push(const AVPacket *packet)
 {
-    if (!m_codecCtx || !m_isCodecCtxOpen) {
-        return false;
-    }
+    if (!m_codecCtx || !m_isCodecCtxOpen) return false;
     
     int ret = avcodec_send_packet(m_codecCtx, packet);
     if (ret < 0) {
-        qCritical("Could not send video packet: %d", ret);
+        qCritical("Send packet error: %d", ret);
         return false;
     }
 
@@ -84,8 +143,7 @@ bool Decoder::push(const AVPacket *packet)
     if (ret == 0) {
         pushFrame();
     } else if (ret != AVERROR(EAGAIN)) {
-        // Error serius (bukan sekadar butuh data lagi)
-        qWarning("Decoder receive error: %d", ret);
+        qWarning("Receive frame error: %d", ret);
         return false;
     }
     
@@ -94,22 +152,15 @@ bool Decoder::push(const AVPacket *packet)
 
 void Decoder::peekFrame(std::function<void (int, int, uint8_t *)> onFrame)
 {
-    if (!m_vb) {
-        return;
-    }
-    m_vb->peekRenderedFrame(onFrame);
+    if (m_vb) m_vb->peekRenderedFrame(onFrame);
 }
 
 void Decoder::pushFrame()
 {
-    if (!m_vb) {
-        return;
-    }
+    if (!m_vb) return;
     bool previousFrameSkipped = true;
     m_vb->offerDecodedFrame(previousFrameSkipped);
-    if (previousFrameSkipped) {
-        return;
-    }
+    if (previousFrameSkipped) return;
     emit newFrame();
 }
 
@@ -118,13 +169,41 @@ void Decoder::onNewFrame()
     if (!m_vb) return;
 
     m_vb->lock();
-    const AVFrame *frame = m_vb->consumeRenderedFrame();
+    AVFrame *frame = m_vb->consumeRenderedFrame();
     
     if (m_onFrame && frame) {
-         // SW Decode = YUV420P (3 Planes: Y, U, V)
-         m_onFrame(frame->width, frame->height,
-                   frame->data[0], frame->data[1], frame->data[2],
-                   frame->linesize[0], frame->linesize[1], frame->linesize[2]);
+        AVFrame *sw_frame = NULL;
+        
+        if (frame->format == m_hwFormat && m_hwFormat != AV_PIX_FMT_NONE) {
+            // HW Frame
+            sw_frame = av_frame_alloc();
+            if (sw_frame) {
+                // Transfer
+                if (av_hwframe_transfer_data(sw_frame, frame, 0) < 0) {
+                    qWarning("Error transferring HW frame to SW");
+                    av_frame_free(&sw_frame);
+                } else {
+                    // Copy property
+                    sw_frame->width = frame->width;
+                    sw_frame->height = frame->height;
+                }
+            }
+        } else {
+            // Fallback mode
+            sw_frame = frame;
+        }
+
+        // Render
+        if (sw_frame && sw_frame->data[0]) {
+             m_onFrame(sw_frame->width, sw_frame->height,
+                       sw_frame->data[0], sw_frame->data[1], sw_frame->data[2],
+                       sw_frame->linesize[0], sw_frame->linesize[1], sw_frame->linesize[2]);
+        }
+
+        // Cleanup
+        if (sw_frame && sw_frame != frame) {
+            av_frame_free(&sw_frame);
+        }
     }
     m_vb->unLock();
 }

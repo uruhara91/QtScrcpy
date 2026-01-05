@@ -8,6 +8,7 @@ extern "C"
 {
 #include "libavcodec/avcodec.h"
 #include "libavutil/pixfmt.h"
+#include "libavutil/hwcontext.h"
 }
 
 class VideoBuffer;
@@ -40,6 +41,10 @@ private:
 private:
     VideoBuffer *m_vb = Q_NULLPTR;
     AVCodecContext *m_codecCtx = Q_NULLPTR;
+    
+    // HW CONTEXT
+    AVBufferRef *m_hwDeviceCtx = Q_NULLPTR;
+    enum AVPixelFormat m_hwFormat = AV_PIX_FMT_NONE;
     
     bool m_isCodecCtxOpen = false;
     

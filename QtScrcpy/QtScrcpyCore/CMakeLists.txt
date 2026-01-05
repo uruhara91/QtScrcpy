@@ -173,6 +173,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         ${FFMPEG_DIR}/lib/${QSC_CPU_ARCH}/avformat.lib
         ${FFMPEG_DIR}/lib/${QSC_CPU_ARCH}/avutil.lib
         ${FFMPEG_DIR}/lib/${QSC_CPU_ARCH}/swscale.lib
+        dwmapi
+        d3d11
+        dxgi
     )
 endif()
 
@@ -229,6 +232,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # System
         pthread
         z
+        va
+        va-drm
+        va-x11
+        dl
     )
     
     # Copy ADB & Server
