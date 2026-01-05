@@ -7,6 +7,8 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 
+void* m_pboMappedPtrs[0][3];
+
 class VideoBuffer;
 struct AVFrame;
 

@@ -67,8 +67,6 @@ void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
 
 void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8_t *dataU, uint8_t *dataV, int linesizeY, int linesizeU, int linesizeV)
 {
-    makeCurrent();
-
     if (width != m_frameSize.width() || height != m_frameSize.height() || !m_pboSizeValid) {
         setFrameSize(QSize(width, height));
         initPBOs(width, height);
@@ -83,19 +81,16 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
     int heights[3] = {height, height / 2, height / 2};
 
     for (int i = 0; i < 3; i++) {
-        void* ptr = glMapNamedBufferRange(m_pbos[uploadIndex][i], 0, 
-                                          widths[i] * heights[i], 
-                                          GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+        uint8_t* dstPtr = (uint8_t*)m_pboMappedPtrs[uploadIndex][i];
         
-        if (ptr) {
+        if (dstPtr) {
             if (srcLinesizes[i] == widths[i]) {
-                memcpy(ptr, srcData[i], widths[i] * heights[i]);
+                 memcpy(dstPtr, srcData[i], widths[i] * heights[i]);
             } else {
-                for (int h = 0; h < heights[i]; h++) {
-                    memcpy(ptr + h * widths[i], srcData[i] + h * srcLinesizes[i], widths[i]);
-                }
+                 for (int h = 0; h < heights[i]; h++) {
+                     memcpy(dstPtr + h * widths[i], srcData[i] + h * srcLinesizes[i], widths[i]);
+                 }
             }
-            glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
         }
     }
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -162,19 +157,22 @@ void QYuvOpenGLWidget::initTextures() {
 }
 
 void QYuvOpenGLWidget::initPBOs(int width, int height) {
-    deInitPBOs();
+    deInitPBOs(); // Pastikan unmap & delete buffer lama dulu
     
-    int sizeY = width * height;
-    int sizeU = (width / 2) * (height / 2);
-    int sizeV = sizeU;
-    int sizes[3] = {sizeY, sizeU, sizeV};
+    int sizes[3] = {
+        width * height,             // Y
+        (width / 2) * (height / 2), // U
+        (width / 2) * (height / 2)  // V
+    };
 
     glCreateBuffers(6, &m_pbos[0][0]); 
 
+    GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+
     for (int set = 0; set < 2; set++) {
         for (int plane = 0; plane < 3; plane++) {
-            glNamedBufferStorage(m_pbos[set][plane], sizes[plane], nullptr, 
-                                 GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+            glNamedBufferStorage(m_pbos[set][plane], sizes[plane], nullptr, flags);
+            m_pboMappedPtrs[set][plane] = glMapNamedBufferRange(m_pbos[set][plane], 0, sizes[plane], flags);
         }
     }
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -210,11 +208,12 @@ void QYuvOpenGLWidget::paintGL() {
     QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
 
     for (int i = 0; i < 3; i++) {
-        glActiveTexture(GL_TEXTURE0 + i);
-        glBindTexture(GL_TEXTURE_2D, m_textures[i]);
+        // Bind Unit Tekstur
+        glBindTextureUnit(i, m_textures[i]);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glTextureSubImage2D(m_textures[i], 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
     }
+
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
