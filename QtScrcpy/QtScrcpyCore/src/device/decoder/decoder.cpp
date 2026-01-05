@@ -42,8 +42,13 @@ Decoder::~Decoder() {
 bool Decoder::open()
 {
     m_swsCtx = NULL;
+
     m_cacheSwFrame = av_frame_alloc();
     m_cacheConvFrame = av_frame_alloc();
+    if (!m_cacheSwFrame || !m_cacheConvFrame) {
+        qCritical("Could not allocate cache frames");
+        return false;
+    }
 
     QThread::currentThread()->setPriority(QThread::TimeCriticalPriority);
 
@@ -131,9 +136,17 @@ void Decoder::close()
         sws_freeContext(m_swsCtx);
         m_swsCtx = Q_NULLPTR;
     }
+
+    if (m_cacheSwFrame) {
+        av_frame_free(&m_cacheSwFrame);
+        m_cacheSwFrame = Q_NULLPTR;
+    }
+    if (m_cacheConvFrame) {
+        av_frame_free(&m_cacheConvFrame);
+        m_cacheConvFrame = Q_NULLPTR;
+    }
+
     m_isCodecCtxOpen = false;
-    if (m_cacheSwFrame) av_frame_free(&m_cacheSwFrame);
-    if (m_cacheConvFrame) av_frame_free(&m_cacheConvFrame);
 }
 
 bool Decoder::push(const AVPacket *packet)
@@ -181,65 +194,56 @@ void Decoder::onNewFrame()
     AVFrame *frame = m_vb->consumeRenderedFrame();
     
     if (m_onFrame && frame) {
-        AVFrame *final_frame = frame;
-        AVFrame *sw_frame = NULL;
-        AVFrame *conv_frame = NULL;
+        AVFrame *final_frame = frame; 
 
-        // 1. PHASE COPY
+        // --- 1. PHASE COPY (GPU -> RAM) dengan REUSE ---
         if (frame->format == m_hwFormat && m_hwFormat != AV_PIX_FMT_NONE) {
-            sw_frame = av_frame_alloc();
-            if (sw_frame) {
-                if (av_hwframe_transfer_data(sw_frame, frame, 0) < 0) {
-                    qWarning("HW Transfer failed");
-                    av_frame_free(&sw_frame);
-                    sw_frame = NULL;
-                } else {
-                    sw_frame->width = frame->width;
-                    sw_frame->height = frame->height;
-                    final_frame = sw_frame;
-                }
+            av_frame_unref(m_cacheSwFrame);
+
+            if (av_hwframe_transfer_data(m_cacheSwFrame, frame, 0) < 0) {
+                qWarning("HW Transfer failed");
+            } else {
+                // Copy metadata
+                m_cacheSwFrame->width = frame->width;
+                m_cacheSwFrame->height = frame->height;
+
+                final_frame = m_cacheSwFrame; 
             }
         }
 
-        // 2. PHASE CONVERT
+        // --- 2. PHASE CONVERT & ROTATION ---
         if (final_frame && final_frame->format != AV_PIX_FMT_YUV420P) {
-            if (!m_swsCtx) {
-                m_swsCtx = sws_getCachedContext(
-                    m_swsCtx,
-                    final_frame->width, final_frame->height, (AVPixelFormat)final_frame->format,
-                    final_frame->width, final_frame->height, AV_PIX_FMT_YUV420P,
-                    SWS_FAST_BILINEAR, NULL, NULL, NULL
-                );
-            }
+            m_swsCtx = sws_getCachedContext(
+                m_swsCtx,
+                final_frame->width, final_frame->height, (AVPixelFormat)final_frame->format,
+                final_frame->width, final_frame->height, AV_PIX_FMT_YUV420P,
+                SWS_FAST_BILINEAR, NULL, NULL, NULL
+            );
             
             if (m_swsCtx) {
-                conv_frame = av_frame_alloc();
-                conv_frame->width = final_frame->width;
-                conv_frame->height = final_frame->height;
-                conv_frame->format = AV_PIX_FMT_YUV420P;
+                av_frame_unref(m_cacheConvFrame);
+
+                m_cacheConvFrame->width = final_frame->width;
+                m_cacheConvFrame->height = final_frame->height;
+                m_cacheConvFrame->format = AV_PIX_FMT_YUV420P;
                 
-                if (av_frame_get_buffer(conv_frame, 32) >= 0) {
+                // Reuse
+                if (av_frame_get_buffer(m_cacheConvFrame, 32) >= 0) {
                      sws_scale(m_swsCtx, 
                                final_frame->data, final_frame->linesize, 0, final_frame->height,
-                               conv_frame->data, conv_frame->linesize);
-
-                     final_frame = conv_frame; 
-                } else {
-                    av_frame_free(&conv_frame);
+                               m_cacheConvFrame->data, m_cacheConvFrame->linesize);
+                     
+                     final_frame = m_cacheConvFrame;
                 }
             }
         }
 
-        // 3. PHASE RENDER
+        // --- 3. PHASE RENDER ---
         if (final_frame && final_frame->data[0] && final_frame->data[1] && final_frame->data[2]) {
              m_onFrame(final_frame->width, final_frame->height,
                        final_frame->data[0], final_frame->data[1], final_frame->data[2],
                        final_frame->linesize[0], final_frame->linesize[1], final_frame->linesize[2]);
         }
-
-        // 4. CLEANUP
-        if (conv_frame) av_frame_free(&conv_frame);
-        if (sw_frame) av_frame_free(&sw_frame);
     }
     m_vb->unLock();
 }
