@@ -235,6 +235,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         va
         va-drm
         va-x11
+        drm
         dl
     )
     
