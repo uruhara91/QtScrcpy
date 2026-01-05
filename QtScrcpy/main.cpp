@@ -28,11 +28,11 @@ QtMsgType covertLogLevel(const QString &logLevel);
 
 int main(int argc, char *argv[])
 {
-    // 1. SETUP PATHS (Robust & Relative)
+    // 1. SETUP PATHS
     QString appPath = QCoreApplication::applicationDirPath();
 
 #ifdef Q_OS_WIN32
-    // Cek dulu di folder yang sama (Deployment), fallback ke struktur dev jika tidak ada
+    // Cek folder
     QString adbPath = appPath + "/adb.exe";
     if (!QFile::exists(adbPath)) {
         adbPath = "../../../QtScrcpy/QtScrcpyCore/src/third_party/adb/win/adb.exe";
@@ -68,7 +68,7 @@ int main(int argc, char *argv[])
 
     g_msgType = covertLogLevel(Config::getInstance().getLogLevel());
 
-    // 2. OPENGL CONFIGURATION (CRITICAL FOR PBO)
+    // 2. OPENGL CONFIGURATION
     QSurfaceFormat varFormat = QSurfaceFormat::defaultFormat();
     varFormat.setDepthBufferSize(0);
     varFormat.setStencilBufferSize(0);
@@ -234,21 +234,26 @@ void myMessageOutput(QtMsgType type, const QMessageLogContext &context, const QS
     }
 #endif
 
-    // Filter Logic untuk GUI Log Window
-    float fLogLevel = g_msgType;
-    if (QtInfoMsg == g_msgType) fLogLevel = QtDebugMsg + 0.5f;
-    
-    float fLogLevel2 = type;
-    if (QtInfoMsg == type) fLogLevel2 = QtDebugMsg + 0.5f;
+    auto getLogRank = [](QtMsgType t) -> int {
+        switch (t) {
+            case QtDebugMsg: return 0;
+            case QtInfoMsg:  return 1;
+            case QtWarningMsg: return 2;
+            case QtCriticalMsg: return 3;
+            case QtFatalMsg: return 4;
+            default: return 0;
+        }
+    };
 
-    if (fLogLevel <= fLogLevel2) {
-        // Safety Check: Pastikan Dialog masih ada sebelum panggil method-nya
+    // Integer Rank
+    if (getLogRank(g_msgType) <= getLogRank(type)) {
+        // Safety Check
         if (g_mainDlg && g_mainDlg->isVisible() && !g_mainDlg->filterLog(outputMsg)) {
             g_mainDlg->outLog(outputMsg);
         }
     }
 
     if (QtFatalMsg == type) {
-        // abort(); // Optional: uncomment if strict crash needed
+        // abort(); // Optional
     }
 }
