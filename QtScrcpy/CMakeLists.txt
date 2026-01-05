@@ -367,7 +367,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/sndcpy/soundservice.apk" "${QSC_BIN_OUTPUT_PATH}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/QtScrcpyCore/src/third_party/scrcpy-server" "${QSC_BIN_OUTPUT_PATH}"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/QtScrcpyCore/src/third_party/adb/linux/adb" "${QSC_BIN_OUTPUT_PATH}"
+       # COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/QtScrcpyCore/src/third_party/adb/linux/adb" "${QSC_BIN_OUTPUT_PATH}"
     )
 
     set(THREADS_PREFER_PTHREAD_FLAG ON)
