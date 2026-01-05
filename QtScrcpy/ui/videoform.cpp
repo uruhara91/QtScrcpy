@@ -169,16 +169,9 @@ void VideoForm::updateRender(int width, int height, uint8_t* dataY, uint8_t* dat
     updateShowSize(QSize(width, height));
     m_videoWidget->setFrameSize(QSize(width, height));
 
-    // --- OPTIMASI SW PBO PULL ---
-    // Alih-alih mengirim pointer (updateTextures), kita hanya memanggil update().
-    // Widget akan menarik frame sendiri dari VideoBuffer menggunakan PBO.
-    
-    Q_UNUSED(dataY);
-    Q_UNUSED(dataU);
-    Q_UNUSED(dataV);
-    Q_UNUSED(linesizeY);
-    Q_UNUSED(linesizeU);
-    Q_UNUSED(linesizeV);
+    m_videoWidget->setFrameData(width, height, 
+                                dataY, dataU, dataV, 
+                                linesizeY, linesizeU, linesizeV);
 
     m_videoWidget->update(); 
 }
