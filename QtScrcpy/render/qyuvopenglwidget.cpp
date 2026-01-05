@@ -1,28 +1,8 @@
 #include "qyuvopenglwidget.h"
-#include "../../QtScrcpyCore/src/device/decoder/videobuffer.h"
 #include <QDebug>
+#include <QOpenGLFunctions>
 
-extern "C" {
-#include <libavutil/frame.h>
-}
-
-#ifndef GL_PIXEL_UNPACK_BUFFER
-#define GL_PIXEL_UNPACK_BUFFER 0x88EC
-#endif
-#ifndef GL_STREAM_DRAW
-#define GL_STREAM_DRAW 0x88E0
-#endif
-#ifndef GL_WRITE_ONLY
-#define GL_WRITE_ONLY 0x88B9
-#endif
-
-static const GLfloat coordinate[] = {
-    -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
-     1.0f, -1.0f, 0.0f,   1.0f, 1.0f,
-    -1.0f,  1.0f, 0.0f,   0.0f, 0.0f,
-     1.0f,  1.0f, 0.0f,   1.0f, 0.0f
-};
-
+// Matrix konversi BT.601 (Standard Android)
 static const char *vertShader = R"(
     attribute vec3 vertexIn;
     attribute vec2 textureIn;
@@ -44,7 +24,9 @@ static const char *fragShader = R"(
         yuv.x = texture2D(tex_y, textureOut).r;
         yuv.y = texture2D(tex_u, textureOut).r - 0.5;
         yuv.z = texture2D(tex_v, textureOut).r - 0.5;
-        rgb = mat3(1.0, 1.0, 1.0, 0.0, -0.39465, 2.03211, 1.13983, -0.58060, 0.0) * yuv;
+        rgb = mat3(1.0, 1.0, 1.0, 
+                   0.0, -0.39465, 2.03211, 
+                   1.13983, -0.58060, 0.0) * yuv;
         gl_FragColor = vec4(rgb, 1.0);
     }
 )";
@@ -67,22 +49,85 @@ void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
     if (m_frameSize != frameSize) {
         m_frameSize = frameSize;
         updateGeometry();
-        m_pboSizeValid = false;
+        m_pboSizeValid = false; // Trigger re-init PBO jika ukuran berubah
     }
 }
 
-const QSize &QYuvOpenGLWidget::frameSize() { return m_frameSize; }
-void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
+// --- FUNGSI BARU: Menerima data dari VideoForm & Copy ke PBO ---
+void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8_t *dataU, uint8_t *dataV, int linesizeY, int linesizeU, int linesizeV)
+{
+    // Kita perlu konteks OpenGL aktif untuk memanipulasi PBO
+    makeCurrent();
+
+    // 1. Inisialisasi PBO jika ukuran berubah atau belum ada
+    if (width != m_frameSize.width() || height != m_frameSize.height() || !m_pboSizeValid) {
+        setFrameSize(QSize(width, height));
+        initPBOs(width, height);
+    }
+
+    // 2. Teknik Double Buffering PBO (Ping-Pong)
+    // index digunakan untuk upload (CPU write), nextIndex digunakan untuk draw (GPU read)
+    int uploadIndex = (m_pboIndex + 1) % 2;
+    m_pboIndex = uploadIndex; 
+
+    // Data source array
+    uint8_t* srcData[3] = {dataY, dataU, dataV};
+    int srcLinesizes[3] = {linesizeY, linesizeU, linesizeV};
+    
+    // Ukuran Plane
+    int widths[3] = {width, width / 2, width / 2};
+    int heights[3] = {height, height / 2, height / 2};
+
+    // 3. Map PBO dan Copy Data (CPU -> GPU Memory Buffer)
+    for (int i = 0; i < 3; i++) {
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[uploadIndex][i]);
+
+        // GL_MAP_INVALIDATE_BUFFER_BIT sangat penting untuk performa (Orphaning)
+        // Ini memberitahu driver "buang data lama, beri saya memori baru", mencegah CPU menunggu GPU.
+        GLubyte* ptr = (GLubyte*)glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, 
+                                                  widths[i] * heights[i], 
+                                                  GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+        
+        if (ptr) {
+            if (srcLinesizes[i] == widths[i]) {
+                // Jalur cepat jika linesize pas (tanpa padding)
+                memcpy(ptr, srcData[i], widths[i] * heights[i]);
+            } else {
+                // Copy per baris jika ada padding (umum di FFmpeg)
+                for (int h = 0; h < heights[i]; h++) {
+                    memcpy(ptr + h * widths[i], srcData[i] + h * srcLinesizes[i], widths[i]);
+                }
+            }
+            glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+        } else {
+             qWarning() << "Failed to map PBO buffer!";
+        }
+    }
+    
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    
+    // Trigger paintGL untuk menggambar
+    update();
+}
 
 void QYuvOpenGLWidget::initializeGL() {
     initializeOpenGLFunctions();
-
+    
+    // Disable VSync agar FPS game tidak terlimit refresh rate monitor (opsional, bagus untuk latency)
+    // Atau set 1 untuk smooth tanpa tearing.
     QSurfaceFormat format = this->format();
     format.setSwapInterval(0); 
     context()->setFormat(format);
 
     initShader();
     initTextures();
+
+    static const GLfloat coordinate[] = {
+        -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
+         1.0f, -1.0f, 0.0f,   1.0f, 1.0f,
+        -1.0f,  1.0f, 0.0f,   0.0f, 0.0f,
+         1.0f,  1.0f, 0.0f,   1.0f, 0.0f
+    };
 
     m_vao.create();
     m_vao.bind();
@@ -104,12 +149,9 @@ void QYuvOpenGLWidget::initializeGL() {
 }
 
 void QYuvOpenGLWidget::initShader() {
-    if (!m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader))
-        qWarning() << "Vertex Shader failed:" << m_program.log();
-    if (!m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShader))
-        qWarning() << "Fragment Shader failed:" << m_program.log();
-    if (!m_program.link())
-        qWarning() << "Program Link failed:" << m_program.log();
+    if (!m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader)) return;
+    if (!m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShader)) return;
+    if (!m_program.link()) return;
 
     m_program.bind();
     m_program.setUniformValue("tex_y", 0);
@@ -122,8 +164,8 @@ void QYuvOpenGLWidget::initTextures() {
     glGenTextures(3, m_textures);
     for (int i = 0; i < 3; i++) {
         glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); // Linear lebih halus untuk game
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
@@ -131,23 +173,24 @@ void QYuvOpenGLWidget::initTextures() {
 
 void QYuvOpenGLWidget::initPBOs(int width, int height) {
     deInitPBOs();
-
+    
     int sizeY = width * height;
     int sizeU = (width / 2) * (height / 2);
     int sizeV = sizeU;
     int sizes[3] = {sizeY, sizeU, sizeV};
 
+    // Alokasi 2 set PBO (6 buffer total)
     glGenBuffers(6, &m_pbos[0][0]);
 
     for (int set = 0; set < 2; set++) {
         for (int plane = 0; plane < 3; plane++) {
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[set][plane]);
+            // GL_STREAM_DRAW: Data di-upload sekali, digambar beberapa kali (cocok untuk video)
             glBufferData(GL_PIXEL_UNPACK_BUFFER, sizes[plane], NULL, GL_STREAM_DRAW);
         }
     }
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     m_pboSizeValid = true;
-    qInfo() << "PBO Initialized for resolution:" << width << "x" << height;
 }
 
 void QYuvOpenGLWidget::deInitTextures() {
@@ -169,72 +212,27 @@ void QYuvOpenGLWidget::resizeGL(int width, int height) {
 }
 
 void QYuvOpenGLWidget::paintGL() {
-    if (!m_vb) return;
+    if (!m_pboSizeValid) return;
 
-    m_vb->lock();
-    const AVFrame *frame = m_vb->consumeRenderedFrame();
-    m_vb->unLock();
+    // Gunakan PBO yang sudah diisi di setFrameData (m_pboIndex adalah buffer yang baru diisi)
+    // Idealnya untuk double buffering murni: draw buffer yang LAMA, write buffer yang BARU.
+    // Tapi untuk latensi terendah (gaming), kita draw buffer yang BARU saja (m_pboIndex).
+    int drawIndex = m_pboIndex;
 
-    if (!frame) return;
-
-    if (frame->width != m_frameSize.width() || frame->height != m_frameSize.height() || !m_pboSizeValid) {
-        m_frameSize.setWidth(frame->width);
-        m_frameSize.setHeight(frame->height);
-        updateGeometry();
-        initPBOs(frame->width, frame->height);
-    }
-
-    QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
-    renderFrame(frame);
-}
-
-void QYuvOpenGLWidget::renderFrame(const AVFrame *frame) {
-    int nextIndex = (m_pboIndex + 1) % 2;
-    int index = nextIndex;
-    m_pboIndex = nextIndex;
-
-    int widths[3] = {frame->width, frame->width / 2, frame->width / 2};
-    int heights[3] = {frame->height, frame->height / 2, frame->height / 2};
-
-    for (int i = 0; i < 3; i++) {
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[index][i]);
-        
-        GLubyte* ptr = (GLubyte*)glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, widths[i] * heights[i], 
-                                                  GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
-        
-        if (ptr) {
-            uint8_t* src = frame->data[i];
-            int linesize = frame->linesize[i];
-            int widthBytes = widths[i];
-            
-            if (linesize == widthBytes) {
-                memcpy(ptr, src, widthBytes * heights[i]);
-            } else {
-                for (int h = 0; h < heights[i]; h++) {
-                    memcpy(ptr + h * widthBytes, src + h * linesize, widthBytes);
-                }
-            }
-            glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
-        }
-    }
+    int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
+    int heights[3] = {m_frameSize.height(), m_frameSize.height() / 2, m_frameSize.height() / 2};
 
     m_program.bind();
-    
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_textures[0]);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[index][0]);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, widths[0], heights[0], 0, GL_RED, GL_UNSIGNED_BYTE, 0);
+    QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
 
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, m_textures[1]);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[index][1]);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, widths[1], heights[1], 0, GL_RED, GL_UNSIGNED_BYTE, 0);
-
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, m_textures[2]);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[index][2]);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, widths[2], heights[2], 0, GL_RED, GL_UNSIGNED_BYTE, 0);
-
+    for (int i = 0; i < 3; i++) {
+        glActiveTexture(GL_TEXTURE0 + i);
+        glBindTexture(GL_TEXTURE_2D, m_textures[i]);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
+        
+        // Update texture dari PBO (Sangat Cepat di GPU)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, widths[i], heights[i], 0, GL_RED, GL_UNSIGNED_BYTE, 0);
+    }
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -242,4 +240,6 @@ void QYuvOpenGLWidget::renderFrame(const AVFrame *frame) {
     m_program.release();
 }
 
+// Fungsi dummy agar kompatibel jika ada panggilan lama
+void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
 void QYuvOpenGLWidget::updateTextures(quint8*, quint8*, quint8*, quint32, quint32, quint32) {}

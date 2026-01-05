@@ -23,6 +23,7 @@ public:
     QSize sizeHint() const override;
 
     void setFrameSize(const QSize &frameSize);
+    void setFrameData(int width, int height, uint8_t *dataY, uint8_t *dataU, uint8_t *dataV, int linesizeY, int linesizeU, int linesizeV);
     const QSize &frameSize();
     void setVideoBuffer(VideoBuffer *vb);
 
