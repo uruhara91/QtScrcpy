@@ -219,7 +219,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     )
 
     # Link libraries
-    target_link_libraries(${QSC_PROJECT_NAME} PUBLIC
+    target_link_libraries(${QSC_PROJECT_NAME} PRIVATE
         # FFmpeg Static
         ${FFMPEG_STATIC_LIB_DIR}/libavformat.a
         ${FFMPEG_STATIC_LIB_DIR}/libavcodec.a
