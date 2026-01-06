@@ -16,7 +16,11 @@ protected:
     }
 
 public:
-    virtual void onFrame(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV, int linesizeY, int linesizeU, int linesizeV) {
+    virtual void onFrame(int width, int height, 
+                     std::span<const uint8_t> dataY, 
+                     std::span<const uint8_t> dataU, 
+                     std::span<const uint8_t> dataV,
+                     int linesizeY, int linesizeU, int linesizeV) = 0; {
         Q_UNUSED(width);
         Q_UNUSED(height);
         Q_UNUSED(dataY);

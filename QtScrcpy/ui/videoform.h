@@ -3,6 +3,7 @@
 
 #include <QPointer>
 #include <QWidget>
+#include <span>
 
 #include "../QtScrcpyCore/include/QtScrcpyCore.h"
 
@@ -27,7 +28,11 @@ public:
     void updateShowSize(const QSize &newSize);
     
     // Legacy support
-    void updateRender(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV, int linesizeY, int linesizeU, int linesizeV);
+    void updateRender(int width, int height, 
+                      std::span<const uint8_t> dataY, 
+                      std::span<const uint8_t> dataU, 
+                      std::span<const uint8_t> dataV, 
+                      int linesizeY, int linesizeU, int linesizeV);
     
     void setSerial(const QString& serial);
     QRect getGrabCursorRect();
@@ -40,7 +45,10 @@ public:
 
 private:
     // DeviceObserver implementation
-    void onFrame(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV,
+    void onFrame(int width, int height, 
+                 std::span<const uint8_t> dataY, 
+                 std::span<const uint8_t> dataU, 
+                 std::span<const uint8_t> dataV,
                  int linesizeY, int linesizeU, int linesizeV) override;
     void updateFPS(quint32 fps) override;
     void grabCursor(bool grab) override;
