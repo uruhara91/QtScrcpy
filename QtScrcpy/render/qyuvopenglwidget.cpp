@@ -6,6 +6,7 @@ extern "C" {
 #include <libavutil/imgutils.h>
 }
 
+// Vertex shader
 static const char *vertShader = R"(#version 450 core
 layout(location = 0) in vec3 vertexIn;
 layout(location = 1) in vec2 textureIn;
@@ -16,28 +17,30 @@ void main(void) {
 }
 )";
 
+// Fragment Shader
 static const char *fragShader = R"(#version 450 core
 in vec2 textureOut;
 out vec4 FragColor;
 
-// Binding
+// Binding: 0 = Y Plane (R8), 1 = UV Plane (RG8)
 layout(binding = 0) uniform sampler2D tex_y;
-layout(binding = 1) uniform sampler2D tex_u;
-layout(binding = 2) uniform sampler2D tex_v;
+layout(binding = 1) uniform sampler2D tex_uv;
 
 void main(void) {
     vec3 yuv;
-    vec3 rgb;
     
-    yuv.x = texture(tex_y, textureOut).r - 0.0627;
-    yuv.y = texture(tex_u, textureOut).r - 0.5;
-    yuv.z = texture(tex_v, textureOut).r - 0.5;
+    // Sample YUV from NV12 Textures
+    yuv.x = texture(tex_y, textureOut).r;
+    vec2 uv = texture(tex_uv, textureOut).rg;
+    yuv.y = uv.r;
+    yuv.z = uv.g;
     
-    rgb = mat3(
+    // Baked YUV to RGB Conversion
+    vec3 rgb = mat3(
         1.164,  1.164,  1.164,
         0.0,   -0.391,  2.018,
         1.596, -0.813,  0.0
-    ) * yuv;
+    ) * yuv - vec3(0.8709, -0.529, 1.082);
     
     FragColor = vec4(rgb, 1.0);
 }
@@ -71,11 +74,9 @@ void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
 
 void QYuvOpenGLWidget::setFrameData(int width, int height, 
                                    std::span<const uint8_t> dataY, 
-                                   std::span<const uint8_t> dataU, 
-                                   std::span<const uint8_t> dataV, 
-                                   int linesizeY, int linesizeU, int linesizeV)
+                                   std::span<const uint8_t> dataUV, 
+                                   int linesizeY, int linesizeUV)
 {
-    // 1. Cek Resize
     if (width != m_frameSize.width() || height != m_frameSize.height()) {
         if (!m_textureSizeMismatch) {
             m_textureSizeMismatch = true;
@@ -86,30 +87,24 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
 
     if (!m_pboSizeValid || m_textureSizeMismatch) return;
 
-    // 2. Atomic Index Swap
     int uploadIndex = (m_pboIndex + 1) % 2;
 
-    const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
-    int srcLinesizes[3] = { linesizeY, linesizeU, linesizeV };
-    int widths[3] = { width, width / 2, width / 2 };
-    int heights[3] = { height, height / 2, height / 2 };
+    // 0: Y Plane, 1: UV Plane
+    const uint8_t* srcData[2] = { dataY.data(), dataUV.data() };
+    int srcLinesizes[2] = { linesizeY, linesizeUV };
+    
+    int copyWidths[2] = { width, width }; 
+    int heights[2] = { height, height / 2 };
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 2; i++) {
         uint8_t* dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
         
         if (dstPtr && srcData[i]) {
-            size_t requiredSize = static_cast<size_t>(srcLinesizes[i] * heights[i]);
-            size_t actualSize = (i == 0) ? dataY.size() : (i == 1 ? dataU.size() : dataV.size());
-
-            if (actualSize >= requiredSize) {
-                av_image_copy_plane(dstPtr, widths[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
-            }
+            av_image_copy_plane(dstPtr, copyWidths[i], srcData[i], srcLinesizes[i], copyWidths[i], heights[i]);
         }
     }
 
-    // 3. Commit Index & Update
     m_pboIndex = uploadIndex;
-
     QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
 }
 
@@ -126,7 +121,6 @@ void QYuvOpenGLWidget::initializeGL() {
     context()->setFormat(format);
 
     initShader();
-    // initTextures();
 
     static const GLfloat coordinate[] = {
         -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
@@ -152,7 +146,6 @@ void QYuvOpenGLWidget::initializeGL() {
     m_vao.release();
     
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
     connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h){
@@ -169,63 +162,58 @@ void QYuvOpenGLWidget::initShader() {
     if (!m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader)) return;
     if (!m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShader)) return;
     if (!m_program.link()) return;
-
-    m_program.bind();
-    m_program.setUniformValue("tex_y", 0);
-    m_program.setUniformValue("tex_u", 1);
-    m_program.setUniformValue("tex_v", 2);
-    m_program.release();
 }
 
 void QYuvOpenGLWidget::initTextures(int width, int height) {
     if (!m_isInitialized) return;
 
     if (m_textures[0] != 0) {
-        glDeleteTextures(3, m_textures);
+        glDeleteTextures(2, m_textures);
     }
 
-    glCreateTextures(GL_TEXTURE_2D, 3, m_textures);
+    glCreateTextures(GL_TEXTURE_2D, 2, m_textures);
 
-    int widths[3] = {width, width / 2, width / 2};
-    int heights[3] = {height, height / 2, height / 2};
+    // Texture 0: Y Plane (Luma) -> R8
+    glTextureParameteri(m_textures[0], GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(m_textures[0], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTextureParameteri(m_textures[0], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(m_textures[0], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTextureStorage2D(m_textures[0], 1, GL_R8, width, height);
 
-    for (int i = 0; i < 3; i++) {
-        glTextureParameteri(m_textures[i], GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTextureParameteri(m_textures[i], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTextureStorage2D(m_textures[i], 1, GL_R8, widths[i], heights[i]);
-    }
+    // Texture 1: UV Plane (Chroma) -> RG8 (Interleaved)
+    glTextureParameteri(m_textures[1], GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(m_textures[1], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTextureParameteri(m_textures[1], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(m_textures[1], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTextureStorage2D(m_textures[1], 1, GL_RG8, width / 2, height / 2);
 }
 
 void QYuvOpenGLWidget::initPBOs(int width, int height) {
     deInitPBOs();
     
-    int sizes[3] = {
-        width * height,             // Y
-        (width / 2) * (height / 2), // U
-        (width / 2) * (height / 2)  // V
+    // UPDATE PBO Sizes for NV12
+    int sizes[2] = {
+        width * height,             // Y Plane (1 byte per pixel)
+        (width / 2) * (height / 2) * 2 // UV Plane (2 bytes per pixel, 1/4 resolution)
     };
 
-    glCreateBuffers(6, &m_pbos[0][0]); 
+    glCreateBuffers(4, &m_pbos[0][0]); // 2 sets * 2 planes = 4 buffers
 
     GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
 
     for (int set = 0; set < 2; set++) {
-        for (int plane = 0; plane < 3; plane++) {
+        for (int plane = 0; plane < 2; plane++) {
             glNamedBufferStorage(m_pbos[set][plane], sizes[plane], nullptr, flags);
             m_pboMappedPtrs[set][plane] = glMapNamedBufferRange(m_pbos[set][plane], 0, sizes[plane], flags);
         }
     }
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     m_pboSizeValid = true;
 }
 
 void QYuvOpenGLWidget::deInitTextures() {
     if (!m_isInitialized) return;
-
     if (m_textures[0] != 0) {
-        glDeleteTextures(3, m_textures);
+        glDeleteTextures(2, m_textures);
         memset(m_textures, 0, sizeof(m_textures));
     }
 }
@@ -233,7 +221,7 @@ void QYuvOpenGLWidget::deInitTextures() {
 void QYuvOpenGLWidget::deInitPBOs() {
     if (!m_isInitialized) return;
     for (int set = 0; set < 2; set++) {
-        for (int plane = 0; plane < 3; plane++) {
+        for (int plane = 0; plane < 2; plane++) {
             if (m_pbos[set][plane] != 0) {
                 glUnmapNamedBuffer(m_pbos[set][plane]); 
                 glDeleteBuffers(1, &m_pbos[set][plane]);
@@ -253,17 +241,20 @@ void QYuvOpenGLWidget::paintGL() {
     if (!m_pboSizeValid) return;
 
     int drawIndex = m_pboIndex;
-    int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
-    int heights[3] = {m_frameSize.height(), m_frameSize.height() / 2, m_frameSize.height() / 2};
+    
+    // Y: w x h, Format RED
+    // UV: w/2 x h/2, Format RG
+    int widths[2] = {m_frameSize.width(), m_frameSize.width() / 2};
+    int heights[2] = {m_frameSize.height(), m_frameSize.height() / 2};
+    GLenum formats[2] = {GL_RED, GL_RG};
 
     m_program.bind();
     QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
 
-    for (int i = 0; i < 3; i++) {
-        // Bind Unit Tekstur
+    for (int i = 0; i < 2; i++) {
         glBindTextureUnit(i, m_textures[i]);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
-        glTextureSubImage2D(m_textures[i], 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glTextureSubImage2D(m_textures[i], 0, 0, 0, widths[i], heights[i], formats[i], GL_UNSIGNED_BYTE, nullptr);
     }
 
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -273,4 +264,3 @@ void QYuvOpenGLWidget::paintGL() {
 }
 
 void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
-void QYuvOpenGLWidget::updateTextures(quint8*, quint8*, quint8*, quint32, quint32, quint32) {}
