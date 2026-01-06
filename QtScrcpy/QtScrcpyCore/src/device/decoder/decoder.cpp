@@ -12,7 +12,7 @@ void AVCodecContextDeleter::operator()(AVCodecContext* ctx) const {
     }
 }
 
-Decoder::Decoder(std::function<void(int, int, uint8_t*, uint8_t*, uint8_t*, int, int, int)> onFrame, QObject *parent)
+Decoder::Decoder(std::function<void(int, int, std::span<const uint8_t>, std::span<const uint8_t>, std::span<const uint8_t>, int, int, int)> onFrame, QObject *parent)
     : QObject(parent)
     , m_vb(new VideoBuffer())
     , m_onFrame(onFrame)
@@ -49,7 +49,10 @@ bool Decoder::open()
     m_codecCtx->thread_type = FF_THREAD_SLICE;
     m_codecCtx->thread_count = qMax(1, QThread::idealThreadCount() - 1);
 
-    if (avcodec_open2(m_codecCtx.get(), codec, NULL) < 0) return false;
+    if (avcodec_open2(m_codecCtx.get(), codec, NULL) < 0) { // .get()
+        qCritical("Could not open H.264 codec");
+        return false;
+    }
     
     m_isCodecCtxOpen = true;
     qInfo("SW Decoder initialized. Threads: %d, Type: Slice", m_codecCtx->thread_count);
@@ -68,7 +71,7 @@ bool Decoder::push(const AVPacket *packet)
         return false;
     }
     
-    int ret = avcodec_send_packet(m_codecCtx, packet);
+    int ret = avcodec_send_packet(m_codecCtx.get(), packet);
     if (ret < 0) {
         qCritical("Could not send video packet: %d", ret);
         return false;
@@ -76,11 +79,10 @@ bool Decoder::push(const AVPacket *packet)
 
     AVFrame *decodingFrame = m_vb->decodingFrame();
     
-    ret = avcodec_receive_frame(m_codecCtx, decodingFrame);
+    ret = avcodec_receive_frame(m_codecCtx.get(), decodingFrame);
     if (ret == 0) {
         pushFrame();
     } else if (ret != AVERROR(EAGAIN)) {
-        // Error serius (bukan sekadar butuh data lagi)
         qWarning("Decoder receive error: %d", ret);
         return false;
     }

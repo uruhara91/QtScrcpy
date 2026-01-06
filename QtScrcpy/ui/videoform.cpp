@@ -157,7 +157,11 @@ void VideoForm::showFPS(bool show)
     m_fpsLabel->setVisible(show);
 }
 
-void VideoForm::updateRender(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV, int linesizeY, int linesizeU, int linesizeV)
+void VideoForm::updateRender(width, height, 
+                                       const_cast<uint8_t*>(dataY.data()), 
+                                       const_cast<uint8_t*>(dataU.data()), 
+                                       const_cast<uint8_t*>(dataV.data()), 
+                                       linesizeY, linesizeU, linesizeV)
 {
     if (m_videoWidget->isHidden()) {
         if (m_loadingWidget) {
