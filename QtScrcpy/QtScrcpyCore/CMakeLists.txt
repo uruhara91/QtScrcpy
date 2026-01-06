@@ -218,8 +218,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/ffmpeg/include
     )
 
-    # Link libraries: Hanya yang wajib untuk SW Decode
-    target_link_libraries(${QSC_PROJECT_NAME} PRIVATE
+    # Link libraries
+    target_link_libraries(${QSC_PROJECT_NAME} PUBLIC
         # FFmpeg Static
         ${FFMPEG_STATIC_LIB_DIR}/libavformat.a
         ${FFMPEG_STATIC_LIB_DIR}/libavcodec.a
