@@ -6,6 +6,7 @@
 #include <QOpenGLBuffer>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
+#include <span>
 
 class VideoBuffer;
 struct AVFrame;
@@ -21,10 +22,13 @@ public:
     QSize sizeHint() const override;
 
     void setFrameSize(const QSize &frameSize);
-    void setFrameData(int width, int height, uint8_t *dataY, uint8_t *dataU, uint8_t *dataV, int linesizeY, int linesizeU, int linesizeV);
+    void setFrameData(int width, int height, 
+                      std::span<const uint8_t> dataY, 
+                      std::span<const uint8_t> dataU, 
+                      std::span<const uint8_t> dataV, 
+                      int linesizeY, int linesizeU, int linesizeV);
     const QSize &frameSize();
     void setVideoBuffer(VideoBuffer *vb);
-
     void updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV);
 
 protected:

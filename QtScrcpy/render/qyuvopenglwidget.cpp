@@ -1,6 +1,7 @@
 #include "qyuvopenglwidget.h"
 #include <QDebug>
 #include <QOpenGLFunctions>
+#include <libavutil/imgutils.h>
 
 static const char *vertShader = R"(#version 450 core
 layout(location = 0) in vec3 vertexIn;
@@ -65,7 +66,11 @@ void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
     }
 }
 
-void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8_t *dataU, uint8_t *dataV, int linesizeY, int linesizeU, int linesizeV)
+void QYuvOpenGLWidget::setFrameData(int width, int height, 
+                                   std::span<const uint8_t> dataY, 
+                                   std::span<const uint8_t> dataU, 
+                                   std::span<const uint8_t> dataV, 
+                                   int linesizeY, int linesizeU, int linesizeV)
 {
     if (width != m_frameSize.width() || height != m_frameSize.height() || !m_pboSizeValid) {
         setFrameSize(QSize(width, height));
@@ -76,17 +81,24 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
     int uploadIndex = (m_pboIndex + 1) % 2;
     m_pboIndex = uploadIndex; 
 
-    uint8_t* srcData[3] = {dataY, dataU, dataV};
-    int srcLinesizes[3] = {linesizeY, linesizeU, linesizeV};
-    int widths[3] = {width, width / 2, width / 2};
-    int heights[3] = {height, height / 2, height / 2};
+    const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
+    int srcLinesizes[3] = { linesizeY, linesizeU, linesizeV };
+    int widths[3] = { width, width / 2, width / 2 };
+    int heights[3] = { height, height / 2, height / 2 };
 
     for (int i = 0; i < 3; i++) {
         uint8_t* dstPtr = (uint8_t*)m_pboMappedPtrs[uploadIndex][i];
-        if (dstPtr) {
-            av_image_copy_plane(dstPtr, widths[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
+        
+        if (dstPtr && srcData[i]) {
+            size_t requiredSize = static_cast<size_t>(srcLinesizes[i] * heights[i]);
+            size_t actualSize = (i == 0) ? dataY.size() : (i == 1 ? dataU.size() : dataV.size());
+
+            if (actualSize >= requiredSize) {
+                av_image_copy_plane(dstPtr, widths[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
+            }
         }
     }
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     update();
 }
 

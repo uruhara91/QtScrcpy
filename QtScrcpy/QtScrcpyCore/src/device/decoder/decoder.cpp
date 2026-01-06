@@ -117,9 +117,12 @@ void Decoder::onNewFrame()
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     
     if (m_onFrame && frame) {
-         // SW Decode = YUV420P (3 Planes: Y, U, V)
+         std::span<const uint8_t> spanY(frame->data[0], frame->linesize[0] * frame->height);
+         std::span<const uint8_t> spanU(frame->data[1], (frame->linesize[1] * frame->height) / 2);
+         std::span<const uint8_t> spanV(frame->data[2], (frame->linesize[2] * frame->height) / 2);
+
          m_onFrame(frame->width, frame->height,
-                   frame->data[0], frame->data[1], frame->data[2],
+                   spanY, spanU, spanV,
                    frame->linesize[0], frame->linesize[1], frame->linesize[2]);
     }
     m_vb->unLock();
