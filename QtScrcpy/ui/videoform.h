@@ -33,7 +33,6 @@ public:
                       std::span<const uint8_t> dataU, 
                       std::span<const uint8_t> dataV, 
                       int linesizeY, int linesizeU, int linesizeV);
-    
     void setSerial(const QString& serial);
     QRect getGrabCursorRect();
     const QSize &frameSize();

@@ -71,15 +71,19 @@ void VideoForm::initUI()
 
     m_videoWidget = new QYuvOpenGLWidget();
     
-    // --- RENDERING ---
-    m_videoWidget->setAttribute(Qt::WA_OpaquePaintEvent);
-    m_videoWidget->setAttribute(Qt::WA_NoSystemBackground);
+    // .data()
+    if (m_videoWidget) {
+        m_videoWidget.data()->setAttribute(Qt::WA_OpaquePaintEvent);
+        m_videoWidget.data()->setAttribute(Qt::WA_NoSystemBackground);
+        m_videoWidget.data()->hide();
+    }
 
-    m_videoWidget->hide();
-    ui->keepRatioWidget->setWidget(m_videoWidget);
+    // setWidget
+    ui->keepRatioWidget->setWidget(m_videoWidget.data());
     ui->keepRatioWidget->setWidthHeightRatio(m_widthHeightRatio);
 
-    m_fpsLabel = new QLabel(m_videoWidget);
+    // Parent QLabel
+    m_fpsLabel = new QLabel(m_videoWidget.data());
     QFont ft;
     ft.setPointSize(15);
     ft.setWeight(QFont::Light);
@@ -90,7 +94,7 @@ void VideoForm::initUI()
     m_fpsLabel->setStyleSheet(R"(QLabel {color: #00FF00; background: transparent;})");
 
     setMouseTracking(true);
-    m_videoWidget->setMouseTracking(true);
+    if (m_videoWidget) m_videoWidget.data()->setMouseTracking(true);
     ui->keepRatioWidget->setMouseTracking(true);
 }
 
@@ -98,17 +102,16 @@ QRect VideoForm::getGrabCursorRect()
 {
     QRect rc;
 #if defined(Q_OS_WIN32)
-    rc = QRect(ui->keepRatioWidget->mapToGlobal(m_videoWidget->pos()), m_videoWidget->size());
-    // high dpi support
-    rc.setTopLeft(rc.topLeft() * m_videoWidget->devicePixelRatioF());
-    rc.setBottomRight(rc.bottomRight() * m_videoWidget->devicePixelRatioF());
+    rc = QRect(ui->keepRatioWidget->mapToGlobal(m_videoWidget.data()->pos()), m_videoWidget.data()->size());
+    rc.setTopLeft(rc.topLeft() * m_videoWidget.data()->devicePixelRatioF());
+    rc.setBottomRight(rc.bottomRight() * m_videoWidget.data()->devicePixelRatioF());
 
     rc.setX(rc.x() + 10);
     rc.setY(rc.y() + 10);
     rc.setWidth(rc.width() - 20);
     rc.setHeight(rc.height() - 20);
 #elif defined(Q_OS_OSX)
-    rc = m_videoWidget->geometry();
+    rc = m_videoWidget.data()->geometry();
     rc.setTopLeft(ui->keepRatioWidget->mapToGlobal(rc.topLeft()));
     rc.setBottomRight(ui->keepRatioWidget->mapToGlobal(rc.bottomRight()));
 
@@ -117,10 +120,9 @@ QRect VideoForm::getGrabCursorRect()
     rc.setWidth(rc.width() - 20);
     rc.setHeight(rc.height() - 20);
 #elif defined(Q_OS_LINUX)
-    rc = QRect(ui->keepRatioWidget->mapToGlobal(m_videoWidget->pos()), m_videoWidget->size());
-    // high dpi support -- taken from the WIN32 section and untested
-    rc.setTopLeft(rc.topLeft() * m_videoWidget->devicePixelRatioF());
-    rc.setBottomRight(rc.bottomRight() * m_videoWidget->devicePixelRatioF());
+    rc = QRect(ui->keepRatioWidget->mapToGlobal(m_videoWidget.data()->pos()), m_videoWidget.data()->size());
+    rc.setTopLeft(rc.topLeft() * m_videoWidget.data()->devicePixelRatioF());
+    rc.setBottomRight(rc.bottomRight() * m_videoWidget.data()->devicePixelRatioF());
 
     rc.setX(rc.x() + 10);
     rc.setY(rc.y() + 10);
@@ -164,45 +166,43 @@ void VideoForm::updateRender(int width, int height,
                              std::span<const uint8_t> dataV, 
                              int linesizeY, int linesizeU, int linesizeV)
 {
-    if (m_videoWidget->isHidden()) {
+    if (m_videoWidget && m_videoWidget.data()->isHidden()) {
         if (m_loadingWidget) {
             m_loadingWidget->close();
         }
-        m_videoWidget->show();
+        m_videoWidget.data()->show();
     }
 
     updateShowSize(QSize(width, height));
 
-    m_videoWidget->setFrameData(width, height, 
-                                dataY, dataU, dataV, 
-                                linesizeY, linesizeU, linesizeV);
+    if (m_videoWidget) {
+        m_videoWidget.data()->setFrameData(width, height, 
+                                           dataY, dataU, dataV, 
+                                           linesizeY, linesizeU, linesizeV);
+    }
 }
 
 void VideoForm::setSerial(const QString &serial)
 {
     m_serial = serial;
 
-    // --- SW PBO ---
-    // 1. Device interface
     auto deviceInterface = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (!deviceInterface) {
         return;
     }
 
-    // 2. Cast
     qsc::Device* deviceImpl = static_cast<qsc::Device*>(deviceInterface.data());
 
-    // 3. Render
-    if (deviceImpl && deviceImpl->decoder()) {
+    if (deviceImpl && deviceImpl->decoder() && m_videoWidget) {
         VideoBuffer* vb = deviceImpl->decoder()->videoBuffer();
         if (vb) {
-            m_videoWidget->setVideoBuffer(vb);
-            qInfo() << "[SW-Opt] Success: VideoBuffer connected to Renderer for serial:" << serial;
+            m_videoWidget.data()->setVideoBuffer(vb);
+            qInfo() << "[SW] Success: VideoBuffer connected to Renderer for serial:" << serial;
         } else {
-            qWarning() << "[SW-Opt] Failed: VideoBuffer is NULL!";
+            qWarning() << "[SW] Failed: VideoBuffer is NULL!";
         }
     } else {
-        qWarning() << "[SW-Opt] Failed: Could not access internal decoder.";
+        qWarning() << "[SW] Failed: Could not access internal decoder.";
     }
 }
 
@@ -223,7 +223,6 @@ void VideoForm::moveCenter()
         qWarning() << "getScreenRect is empty";
         return;
     }
-    // 窗口居中
     move(screenRect.center() - QRect(0, 0, size().width(), size().height()).center());
 }
 
@@ -503,21 +502,14 @@ void VideoForm::updateShowSize(const QSize &newSize)
 void VideoForm::switchFullScreen()
 {
     if (isFullScreen()) {
-        // 横屏全屏铺满全屏，恢复时，恢复保持宽高比
         if (m_widthHeightRatio > 1.0f) {
             ui->keepRatioWidget->setWidthHeightRatio(m_widthHeightRatio);
         }
 
         showNormal();
-        // back to normal size.
         resize(m_normalSize);
-        // fullscreen window will move (0,0). qt bug?
         move(m_fullScreenBeforePos);
 
-#ifdef Q_OS_OSX
-        //setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
-        //show();
-#endif
         if (m_skin) {
             updateStyleSheet(m_frameSize.height() > m_frameSize.width());
         }
@@ -526,27 +518,19 @@ void VideoForm::switchFullScreen()
         ::SetThreadExecutionState(ES_CONTINUOUS);
 #endif
     } else {
-        // 横屏全屏铺满全屏，不保持宽高比
         if (m_widthHeightRatio > 1.0f) {
             ui->keepRatioWidget->setWidthHeightRatio(-1.0f);
         }
 
-        // record current size before fullscreen, it will be used to rollback size after exit fullscreen.
         m_normalSize = size();
-
         m_fullScreenBeforePos = pos();
-        // 这种临时增加标题栏再全屏的方案会导致收不到mousemove事件，导致setmousetrack失效
-        // mac fullscreen must show title bar
-#ifdef Q_OS_OSX
-        //setWindowFlags(windowFlags() & ~Qt::FramelessWindowHint);
-#endif
+
         showToolForm(false);
         if (m_skin) {
             layout()->setContentsMargins(0, 0, 0, 0);
         }
         showFullScreen();
 
-        // 全屏状态禁止电脑休眠、息屏
 #ifdef Q_OS_WIN32
         ::SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
 #endif
@@ -563,7 +547,6 @@ bool VideoForm::isHost()
 
 void VideoForm::updateFPS(quint32 fps)
 {
-    //qDebug() << "FPS:" << fps;
     if (!m_fpsLabel) {
         return;
     }
@@ -576,7 +559,11 @@ void VideoForm::grabCursor(bool grab)
     MouseTap::getInstance()->enableMouseEventTap(rc, grab);
 }
 
-void VideoForm::onFrame(int width, int height, uint8_t *dataY, uint8_t *dataU, uint8_t *dataV, int linesizeY, int linesizeU, int linesizeV)
+void VideoForm::onFrame(int width, int height, 
+                        std::span<const uint8_t> dataY, 
+                        std::span<const uint8_t> dataU, 
+                        std::span<const uint8_t> dataV, 
+                        int linesizeY, int linesizeU, int linesizeV)
 {
     updateRender(width, height, dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
 }
@@ -621,18 +608,17 @@ void VideoForm::mousePressEvent(QMouseEvent *event)
         QPointF globalPos = event->globalPosition();
 #endif
 
-    if (m_videoWidget->geometry().contains(event->pos())) {
+    if (m_videoWidget && m_videoWidget.data()->geometry().contains(event->pos())) {
         if (!device) {
             return;
         }
-        QPointF mappedPos = m_videoWidget->mapFrom(this, localPos.toPoint());
+        QPointF mappedPos = m_videoWidget.data()->mapFrom(this, localPos.toPoint());
         QMouseEvent newEvent(event->type(), mappedPos, globalPos, event->button(), event->buttons(), event->modifiers());
-        emit device->mouseEvent(&newEvent, m_videoWidget->frameSize(), m_videoWidget->size());
+        emit device->mouseEvent(&newEvent, m_videoWidget.data()->frameSize(), m_videoWidget.data()->size());
 
-        // debug keymap pos
         if (event->button() == Qt::LeftButton) {
-            qreal x = localPos.x() / m_videoWidget->size().width();
-            qreal y = localPos.y() / m_videoWidget->size().height();
+            qreal x = localPos.x() / m_videoWidget.data()->size().width();
+            qreal y = localPos.y() / m_videoWidget.data()->size().height();
             QString posTip = QString(R"("pos": {"x": %1, "y": %2})").arg(x).arg(y);
             qInfo() << posTip.toStdString().c_str();
         }
@@ -658,22 +644,16 @@ void VideoForm::mouseReleaseEvent(QMouseEvent *event)
         QPointF localPos = event->position();
         QPointF globalPos = event->globalPosition();
 #endif
-        // local check
-        QPointF local = m_videoWidget->mapFrom(this, localPos.toPoint());
-        if (local.x() < 0) {
-            local.setX(0);
-        }
-        if (local.x() > m_videoWidget->width()) {
-            local.setX(m_videoWidget->width());
-        }
-        if (local.y() < 0) {
-            local.setY(0);
-        }
-        if (local.y() > m_videoWidget->height()) {
-            local.setY(m_videoWidget->height());
-        }
+        if (!m_videoWidget) return;
+
+        QPointF local = m_videoWidget.data()->mapFrom(this, localPos.toPoint());
+        if (local.x() < 0) local.setX(0);
+        if (local.x() > m_videoWidget.data()->width()) local.setX(m_videoWidget.data()->width());
+        if (local.y() < 0) local.setY(0);
+        if (local.y() > m_videoWidget.data()->height()) local.setY(m_videoWidget.data()->height());
+        
         QMouseEvent newEvent(event->type(), local, globalPos, event->button(), event->buttons(), event->modifiers());
-        emit device->mouseEvent(&newEvent, m_videoWidget->frameSize(), m_videoWidget->size());
+        emit device->mouseEvent(&newEvent, m_videoWidget.data()->frameSize(), m_videoWidget.data()->size());
     } else {
         m_dragPosition = QPoint(0, 0);
     }
@@ -689,13 +669,12 @@ void VideoForm::mouseMoveEvent(QMouseEvent *event)
         QPointF globalPos = event->globalPosition();
 #endif
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
-    if (m_videoWidget->geometry().contains(event->pos())) {
-        if (!device) {
-            return;
-        }
-        QPointF mappedPos = m_videoWidget->mapFrom(this, localPos.toPoint());
+    if (m_videoWidget && m_videoWidget.data()->geometry().contains(event->pos())) {
+        if (!device) return;
+        
+        QPointF mappedPos = m_videoWidget.data()->mapFrom(this, localPos.toPoint());
         QMouseEvent newEvent(event->type(), mappedPos, globalPos, event->button(), event->buttons(), event->modifiers());
-        emit device->mouseEvent(&newEvent, m_videoWidget->frameSize(), m_videoWidget->size());
+        emit device->mouseEvent(&newEvent, m_videoWidget.data()->frameSize(), m_videoWidget.data()->size());
     } else if (!m_dragPosition.isNull()) {
         if (event->buttons() & Qt::LeftButton) {
             move(globalPos.toPoint() - m_dragPosition);
@@ -707,7 +686,7 @@ void VideoForm::mouseMoveEvent(QMouseEvent *event)
 void VideoForm::mouseDoubleClickEvent(QMouseEvent *event)
 {
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
-    if (event->button() == Qt::LeftButton && !m_videoWidget->geometry().contains(event->pos())) {
+    if (event->button() == Qt::LeftButton && m_videoWidget && !m_videoWidget.data()->geometry().contains(event->pos())) {
         if (!isMaximized()) {
             removeBlackRect();
         }
@@ -717,10 +696,8 @@ void VideoForm::mouseDoubleClickEvent(QMouseEvent *event)
         emit device->postBackOrScreenOn(event->type() == QEvent::MouseButtonPress);
     }
 
-    if (m_videoWidget->geometry().contains(event->pos())) {
-        if (!device) {
-            return;
-        }
+    if (m_videoWidget && m_videoWidget.data()->geometry().contains(event->pos())) {
+        if (!device) return;
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
         QPointF localPos = event->localPos();
         QPointF globalPos = event->globalPos();
@@ -728,58 +705,55 @@ void VideoForm::mouseDoubleClickEvent(QMouseEvent *event)
         QPointF localPos = event->position();
         QPointF globalPos = event->globalPosition();
 #endif
-        QPointF mappedPos = m_videoWidget->mapFrom(this, localPos.toPoint());
+
+        QPointF mappedPos = m_videoWidget.data()->mapFrom(this, localPos.toPoint());
         QMouseEvent newEvent(event->type(), mappedPos, globalPos, event->button(), event->buttons(), event->modifiers());
-        emit device->mouseEvent(&newEvent, m_videoWidget->frameSize(), m_videoWidget->size());
+        emit device->mouseEvent(&newEvent, m_videoWidget.data()->frameSize(), m_videoWidget.data()->size());
     }
 }
 
 void VideoForm::wheelEvent(QWheelEvent *event)
 {
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!m_videoWidget) return;
+
 #if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-    if (m_videoWidget->geometry().contains(event->position().toPoint())) {
-        if (!device) {
-            return;
-        }
-        QPointF pos = m_videoWidget->mapFrom(this, event->position().toPoint());
+    if (m_videoWidget.data()->geometry().contains(event->position().toPoint())) {
+        if (!device) return;
+        QPointF pos = m_videoWidget.data()->mapFrom(this, event->position().toPoint());
         QWheelEvent wheelEvent(
             pos, event->globalPosition(), event->pixelDelta(), event->angleDelta(), event->buttons(), event->modifiers(), event->phase(), event->inverted());
 #else
-    if (m_videoWidget->geometry().contains(event->pos())) {
-        if (!device) {
-            return;
-        }
-        QPointF pos = m_videoWidget->mapFrom(this, event->pos());
+    if (m_videoWidget.data()->geometry().contains(event->pos())) {
+        if (!device) return;
+        QPointF pos = m_videoWidget.data()->mapFrom(this, event->pos());
 
         QWheelEvent wheelEvent(
             pos, event->globalPosF(), event->pixelDelta(), event->angleDelta(), event->delta(), event->orientation(),
             event->buttons(), event->modifiers(), event->phase(), event->source(), event->inverted());
 #endif
-        emit device->wheelEvent(&wheelEvent, m_videoWidget->frameSize(), m_videoWidget->size());
+        emit device->wheelEvent(&wheelEvent, m_videoWidget.data()->frameSize(), m_videoWidget.data()->size());
     }
 }
 
 void VideoForm::keyPressEvent(QKeyEvent *event)
 {
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
-    if (!device) {
-        return;
-    }
+    if (!device || !m_videoWidget) return;
+    
     if (Qt::Key_Escape == event->key() && !event->isAutoRepeat() && isFullScreen()) {
         switchFullScreen();
     }
 
-    emit device->keyEvent(event, m_videoWidget->frameSize(), m_videoWidget->size());
+    emit device->keyEvent(event, m_videoWidget.data()->frameSize(), m_videoWidget.data()->size());
 }
 
 void VideoForm::keyReleaseEvent(QKeyEvent *event)
 {
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
-    if (!device) {
-        return;
-    }
-    emit device->keyEvent(event, m_videoWidget->frameSize(), m_videoWidget->size());
+    if (!device || !m_videoWidget) return;
+
+    emit device->keyEvent(event, m_videoWidget.data()->frameSize(), m_videoWidget.data()->size());
 }
 
 void VideoForm::paintEvent(QPaintEvent *paint)
@@ -813,16 +787,13 @@ void VideoForm::resizeEvent(QResizeEvent *event)
         return;
     }
     QSize curSize = size();
-    // 限制VideoForm尺寸不能小于keepRatioWidget good size
     if (m_widthHeightRatio > 1.0f) {
-        // hor
         if (curSize.height() <= goodSize.height()) {
             setMinimumHeight(goodSize.height());
         } else {
             setMinimumHeight(0);
         }
     } else {
-        // ver
         if (curSize.width() <= goodSize.width()) {
             setMinimumWidth(goodSize.width());
         } else {

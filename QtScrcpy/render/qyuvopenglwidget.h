@@ -41,7 +41,6 @@ protected:
 
 private:
     void initShader();
-
     void initTextures(int width, int height);
     void deInitTextures();
     
@@ -62,7 +61,7 @@ private:
 
     GLuint m_pbos[2][3] = {{0,0,0}, {0,0,0}};
     void* m_pboMappedPtrs[2][3] = {{nullptr, nullptr, nullptr}, {nullptr, nullptr, nullptr}};
-    int m_pboIndex = 0;
+    
     bool m_pboSizeValid = false;
     bool m_isInitialized = false;
 
