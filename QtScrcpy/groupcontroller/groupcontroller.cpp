@@ -1,4 +1,5 @@
 #include <QPointer>
+#include <span>
 
 #include "groupcontroller.h"
 #include "videoform.h"
@@ -77,6 +78,24 @@ void GroupController::removeDevice(const QString &serial)
     if (isHost(serial)) {
         device->deRegisterDeviceObserver(this);
     }
+}
+
+void GroupController::onFrame(int width, int height, 
+                              std::span<const uint8_t> dataY, 
+                              std::span<const uint8_t> dataU, 
+                              std::span<const uint8_t> dataV, 
+                              int linesizeY, int linesizeU, int linesizeV)
+{
+    // GroupController tidak memproses video, hanya input control.
+    // Jadi kita abaikan saja datanya.
+    Q_UNUSED(width);
+    Q_UNUSED(height);
+    Q_UNUSED(dataY);
+    Q_UNUSED(dataU);
+    Q_UNUSED(dataV);
+    Q_UNUSED(linesizeY);
+    Q_UNUSED(linesizeU);
+    Q_UNUSED(linesizeV);
 }
 
 void GroupController::mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize)

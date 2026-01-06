@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QVector>
+#include <span> // <--- Tambahkan ini
 
 #include "QtScrcpyCore.h"
 
@@ -17,7 +18,12 @@ public:
     void removeDevice(const QString& serial);
 
 private:
-    // DeviceObserver
+    void onFrame(int width, int height, 
+                 std::span<const uint8_t> dataY, 
+                 std::span<const uint8_t> dataU, 
+                 std::span<const uint8_t> dataV, 
+                 int linesizeY, int linesizeU, int linesizeV) override;
+
     void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize) override;
     void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize) override;
     void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize) override;
