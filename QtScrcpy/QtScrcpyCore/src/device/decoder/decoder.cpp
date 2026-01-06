@@ -3,6 +3,14 @@
 #include "compat.h"
 #include "decoder.h"
 #include "videobuffer.h"
+#include <libavcodec/avcodec.h>
+#include <libavutil/imgutils.h>
+
+void AVCodecContextDeleter::operator()(AVCodecContext* ctx) const {
+    if (ctx) {
+        avcodec_free_context(&ctx);
+    }
+}
 
 Decoder::Decoder(std::function<void(int, int, uint8_t*, uint8_t*, uint8_t*, int, int, int)> onFrame, QObject *parent)
     : QObject(parent)
@@ -28,16 +36,11 @@ bool Decoder::open()
     QThread::currentThread()->setPriority(QThread::HighestPriority);
 
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-    if (!codec) {
-        qCritical("H.264 decoder not found");
-        return false;
-    }
+    if (!codec) return false;
 
-    m_codecCtx = avcodec_alloc_context3(codec);
-    if (!m_codecCtx) {
-        qCritical("Could not allocate decoder context");
-        return false;
-    }
+    m_codecCtx = std::unique_ptr<AVCodecContext, AVCodecContextDeleter>(avcodec_alloc_context3(codec));
+    
+    if (!m_codecCtx) return false;
 
     m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
     m_codecCtx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
@@ -46,11 +49,7 @@ bool Decoder::open()
     m_codecCtx->thread_type = FF_THREAD_SLICE;
     m_codecCtx->thread_count = qMax(1, QThread::idealThreadCount() - 1);
 
-    // Open Codec
-    if (avcodec_open2(m_codecCtx, codec, NULL) < 0) {
-        qCritical("Could not open H.264 codec");
-        return false;
-    }
+    if (avcodec_open2(m_codecCtx.get(), codec, NULL) < 0) return false;
     
     m_isCodecCtxOpen = true;
     qInfo("SW Decoder initialized. Threads: %d, Type: Slice", m_codecCtx->thread_count);
@@ -59,10 +58,7 @@ bool Decoder::open()
 
 void Decoder::close()
 {
-    if (m_codecCtx) {
-        avcodec_free_context(&m_codecCtx);
-        m_codecCtx = Q_NULLPTR;
-    }
+    m_codecCtx.reset();
     m_isCodecCtxOpen = false;
 }
 

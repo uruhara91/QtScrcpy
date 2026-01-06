@@ -70,7 +70,6 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
     if (width != m_frameSize.width() || height != m_frameSize.height() || !m_pboSizeValid) {
         setFrameSize(QSize(width, height));
         initPBOs(width, height);
-
         initTextures(width, height);
     }
 
@@ -84,18 +83,10 @@ void QYuvOpenGLWidget::setFrameData(int width, int height, uint8_t *dataY, uint8
 
     for (int i = 0; i < 3; i++) {
         uint8_t* dstPtr = (uint8_t*)m_pboMappedPtrs[uploadIndex][i];
-        
         if (dstPtr) {
-            if (srcLinesizes[i] == widths[i]) {
-                 memcpy(dstPtr, srcData[i], widths[i] * heights[i]);
-            } else {
-                 for (int h = 0; h < heights[i]; h++) {
-                     memcpy(dstPtr + h * widths[i], srcData[i] + h * srcLinesizes[i], widths[i]);
-                 }
-            }
+            av_image_copy_plane(dstPtr, widths[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
         }
     }
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     update();
 }
 

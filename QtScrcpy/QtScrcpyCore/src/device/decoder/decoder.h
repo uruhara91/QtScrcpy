@@ -3,12 +3,19 @@
 
 #include <QObject>
 #include <functional>
+#include <memory>
 
 extern "C"
 {
 #include "libavcodec/avcodec.h"
 #include "libavutil/pixfmt.h"
 }
+
+struct AVCodecContext;
+struct AVPacket;
+struct AVCodecContextDeleter {
+    void operator()(AVCodecContext* ctx) const;
+};
 
 class VideoBuffer;
 
@@ -40,6 +47,7 @@ private:
 private:
     VideoBuffer *m_vb = Q_NULLPTR;
     AVCodecContext *m_codecCtx = Q_NULLPTR;
+    std::unique_ptr<AVCodecContext, AVCodecContextDeleter> m_codecCtx;
     
     bool m_isCodecCtxOpen = false;
     
