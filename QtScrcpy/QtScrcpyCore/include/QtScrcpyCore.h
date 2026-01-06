@@ -1,6 +1,7 @@
 #pragma once
 #include <QPointer>
 #include <QMouseEvent>
+#include <span>
 
 #include "QtScrcpyCoreDef.h"
 
@@ -16,16 +17,11 @@ protected:
     }
 
 public:
-    virtual void onFrame(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV, int linesizeY, int linesizeU, int linesizeV) {
-        Q_UNUSED(width);
-        Q_UNUSED(height);
-        Q_UNUSED(dataY);
-        Q_UNUSED(dataU);
-        Q_UNUSED(dataV);
-        Q_UNUSED(linesizeY);
-        Q_UNUSED(linesizeU);
-        Q_UNUSED(linesizeV);
-    }
+    virtual void onFrame(int width, int height, 
+                         std::span<const uint8_t> dataY, 
+                         std::span<const uint8_t> dataU, 
+                         std::span<const uint8_t> dataV, 
+                         int linesizeY, int linesizeU, int linesizeV) = 0;
     virtual void updateFPS(quint32 fps) { Q_UNUSED(fps); }
     virtual void grabCursor(bool grab) {Q_UNUSED(grab);}
 

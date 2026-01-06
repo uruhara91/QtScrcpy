@@ -2,30 +2,17 @@
 #define QYUVOPENGLWIDGET_H
 
 #include <QOpenGLWidget>
-#include <QOpenGLFunctions>
+#include <QOpenGLFunctions_4_5_Core>
 #include <QOpenGLBuffer>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
-#include <QMutex>
-#include <QMap>
-#include <QPair>
-#include <QList>
+#include <span>
+#include <atomic>
 
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h> 
-#include <libdrm/drm_fourcc.h>
-
-// Forward Declaration
 class VideoBuffer;
 struct AVFrame;
-struct AVDRMPlaneDescriptor;
-struct AVDRMObjectDescriptor;
 
-class QYuvOpenGLWidget
-    : public QOpenGLWidget
-    , protected QOpenGLFunctions
+class QYuvOpenGLWidget : public QOpenGLWidget, protected QOpenGLFunctions_4_5_Core
 {
     Q_OBJECT
 public:
@@ -35,14 +22,17 @@ public:
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
 
-    void setFrameSize(const QSize &frameSize);
+    void setFrameData(int width, int height, 
+                      std::span<const uint8_t> dataY, 
+                      std::span<const uint8_t> dataU, 
+                      std::span<const uint8_t> dataV, 
+                      int linesizeY, int linesizeU, int linesizeV);
     const QSize &frameSize();
-
-    // Legacy method
+    void setVideoBuffer(VideoBuffer *vb);
     void updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV);
 
-    // Zero Copy Interface
-    void setVideoBuffer(VideoBuffer *vb);
+signals:
+    void requestUpdateTextures(int width, int height);
 
 protected:
     void initializeGL() override;
@@ -51,16 +41,15 @@ protected:
 
 private:
     void initShader();
-    void initTextures();
+    void initTextures(int width, int height);
     void deInitTextures();
     
-    // Logic render Software
-    void renderSoftwareFrame();
-    // Logic render Hardware
-    void renderHardwareFrame(const AVFrame *frame);
-
-    // Helper cleanup
-    // void releaseHWFrame();
+    void initPBOs(int width, int height);
+    void deInitPBOs();
+    
+    void renderFrame(const AVFrame *frame);
+    
+    void setFrameSize(const QSize &frameSize);
 
 private:
     QSize m_frameSize = { -1, -1 };
@@ -68,37 +57,18 @@ private:
     
     QOpenGLBuffer m_vbo;
     QOpenGLVertexArrayObject m_vao;
+    QOpenGLShaderProgram m_program;
+
+    GLuint m_textures[3] = {0, 0, 0}; 
+
+    GLuint m_pbos[2][3] = {{0,0,0}, {0,0,0}};
+    void* m_pboMappedPtrs[2][3] = {{nullptr, nullptr, nullptr}, {nullptr, nullptr, nullptr}};
     
-    QOpenGLShaderProgram m_programSW;
-    QOpenGLShaderProgram m_programHW;
+    bool m_pboSizeValid = false;
+    bool m_isInitialized = false;
 
-    // SW index 0-2: Y, U, V
-    // HW index 0 (Y) and 1 (UV)
-    GLuint m_textures[4] = {0, 0, 0, 0};
-
-    PFNEGLCREATEIMAGEKHRPROC m_eglCreateImageKHR = nullptr;
-    PFNEGLDESTROYIMAGEKHRPROC m_eglDestroyImageKHR = nullptr;
-    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC m_glEGLImageTargetTexture2DOES = nullptr;
-
-    // --- EGL Zero-Copy Resources ---
-    EGLImageKHR m_eglImageY = EGL_NO_IMAGE_KHR;
-    EGLImageKHR m_eglImageUV = EGL_NO_IMAGE_KHR;
-    
-    const AVFrame *m_currentHWFrame = nullptr;
-
-    // EGL Image Cache Structure
-    struct EGLImageCacheEntry {
-        EGLImageKHR image;
-        int width;
-        int height;
-    };
-    
-    QMap<QPair<int, int>, EGLImageCacheEntry> m_eglImageCache;
-    
-    QList<QPair<int, int>> m_cacheRecentUse; 
-
-    void flushEGLCache(); 
-    EGLImageKHR getCachedEGLImage(int fd, int offset, int pitch, int width, int height, uint64_t modifier);
+    std::atomic<int> m_pboIndex = 0;
+    std::atomic<bool> m_textureSizeMismatch = false;
 };
 
 #endif // QYUVOPENGLWIDGET_H

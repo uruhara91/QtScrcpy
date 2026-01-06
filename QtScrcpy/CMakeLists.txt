@@ -1,12 +1,9 @@
 # For VS2019 and Xcode 12+ support.
-cmake_minimum_required(VERSION 3.19 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
 #
 # Global config
 #
-
-# QC is "Qt CMake"
-# https://www.kdab.com/wp-content/uploads/stories/QTVTC20-Using-Modern-CMake-Kevin-Funk.pdf
 
 # QC Custom config
 set(QC_PROJECT_NAME "QtScrcpy")
@@ -43,7 +40,7 @@ message(STATUS "[${PROJECT_NAME}] CPU_ARCH:${QC_CPU_ARCH}")
 
 # CMake set
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # default RelWithDebInfo
@@ -73,14 +70,12 @@ if (MSVC)
     add_compile_options(/W3 /WX /wd4566)
 
     # avoid warning C4819
-    #add_compile_options(-source-charset:utf-8)
-    # /utf-8 will set source charset and execution charset to utf-8, so we don't need to set source-charset:utf-8
     add_compile_options(/utf-8)
 
     # ensure we use minimal "windows.h" lib without the crazy min max macros
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
     
-    # disable SAFESEH - avoid "LNK2026: module unsafe"(Qt5.15&&vs2019)     
+    # disable SAFESEH
     add_link_options(/SAFESEH:NO)
 endif()
 
@@ -90,7 +85,7 @@ if (NOT MSVC)
     add_compile_options(-Wall -Wextra -pedantic -Werror)
 
     # disable some warning
-    add_compile_options(-Wno-nested-anon-types -Wno-c++17-extensions -Wno-overloaded-virtual)
+    add_compile_options(-Wno-nested-anon-types -Wno-c++26-extensions -Wno-overloaded-virtual)
 endif()
 
 #
@@ -111,7 +106,6 @@ set(CMAKE_AUTORCC ON)
 set(qt_required_components Widgets Network Multimedia)
 
 if (QT_DESIRED_VERSION MATCHES 6)
-    # list(APPEND qt_required_components Core5Compat)
     list(APPEND qt_required_components OpenGL)
     list(APPEND qt_required_components OpenGLWidgets)
     list(APPEND qt_required_components Gui)
@@ -131,7 +125,6 @@ set(LINK_LIBS
 )
 
 if (QT_DESIRED_VERSION MATCHES 6)
-    # list(APPEND LINK_LIBS Qt${QT_DESIRED_VERSION}::Core5Compat)
     list(APPEND LINK_LIBS Qt${QT_DESIRED_VERSION}::GuiPrivate)
     list(APPEND LINK_LIBS Qt${QT_DESIRED_VERSION}::OpenGL)
     list(APPEND LINK_LIBS Qt${QT_DESIRED_VERSION}::OpenGLWidgets)
@@ -253,9 +246,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     )
 endif()
 
-# 翻译相关（使用shell脚本替代cmake处理翻译）
-# add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/res/i18n)
-
 # all sources
 set(QC_PROJECT_SOURCES
     ${QC_FONTAWESOME_SOURCES}
@@ -275,7 +265,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(QC_RUNTIME_TYPE WIN32)
 endif()
 
-
 add_executable(${PROJECT_NAME} ${QC_RUNTIME_TYPE} ${QC_PROJECT_SOURCES})
 
 # Log compile definitions
@@ -294,14 +283,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE ui)
 target_include_directories(${PROJECT_NAME} PRIVATE render)
 
 # output dir
-# https://cmake.org/cmake/help/latest/prop_gbl/GENERATOR_IS_MULTI_CONFIG.html
 get_property(QC_IS_MUTIL_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 message(STATUS "multi config:" QC_IS_MUTIL_CONFIG)
 
-# $<0:> 使用生成器表达式为每个config设置RUNTIME_OUTPUT_DIRECTORY，这样multi config就不会自动追加CMAKE_BUILD_TYPE子目录了
-# 1. multi config介绍 https://cmake.org/cmake/help/latest/prop_gbl/GENERATOR_IS_MULTI_CONFIG.html
-# 2. multi config在不用表达式生成器时自动追加子目录说明 https://cmake.org/cmake/help/latest/prop_tgt/RUNTIME_OUTPUT_DIRECTORY.html
-# 3. 使用表达式生成器禁止multi config自动追加子目录解决方案 https://stackoverflow.com/questions/7747857/in-cmake-how-do-i-work-around-the-debug-and-release-directories-visual-studio-2
 set_target_properties(${PROJECT_NAME} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../output/${QC_CPU_ARCH}/${CMAKE_BUILD_TYPE}/$<0:>"
 )
@@ -316,7 +300,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(QSC_DEPLOY_PATH ${QSC_BIN_OUTPUT_PATH})
 
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/sndcpy/soundservice.apk" "${QSC_BIN_OUTPUT_PATH}"
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/sndcpy/soundservice.apk" "${QSC_BIN_OUTPUT_PATH}"
     )
 endif()
 
@@ -343,7 +327,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         PROPERTIES MACOSX_PACKAGE_LOCATION Resources
     )
 
-    # use MACOSX_BUNDLE_INFO_PLIST custom plist, not use MACOSX_BUNDLE_BUNDLE_NAME etc..
+    # use MACOSX_BUNDLE_INFO_PLIST custom plist
     set(INFO_PLIST_TEMPLATE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/res/Info_Mac.plist.in")
     set(INFO_PLIST_FILE "${CMAKE_CURRENT_SOURCE_DIR}/res/Info_Mac.plist")
     file(READ "${INFO_PLIST_TEMPLATE_FILE}" plist_contents)
@@ -366,30 +350,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/sndcpy/soundservice.apk" "${QSC_BIN_OUTPUT_PATH}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/QtScrcpyCore/src/third_party/scrcpy-server" "${QSC_BIN_OUTPUT_PATH}"
     )
 
-    set(THREADS_PREFER_PTHREAD_FLAG ON)
     find_package(Threads REQUIRED)
-    find_package(mimalloc REQUIRED)
+    find_package(mimalloc QUIET)
 
     target_link_libraries(${PROJECT_NAME} PRIVATE
-        # xcb https://doc.qt.io/qt-5/linux-requirements.html
         xcb
         Threads::Threads
     )
-
-    # linux set app icon: https://blog.csdn.net/MrNoboday/article/details/82870853
+    
+    if(mimalloc_FOUND)
+        target_link_libraries(${PROJECT_NAME} PRIVATE mimalloc)
+    endif()
 endif()
-
-#
-# common deps
-#
 
 add_subdirectory(QtScrcpyCore)
 
-# Qt
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${LINK_LIBS}
     QtScrcpyCore
-    mimalloc
 )

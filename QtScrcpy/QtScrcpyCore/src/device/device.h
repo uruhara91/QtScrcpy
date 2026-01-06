@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QTime>
+#include <span>
 
 #include "../../include/QtScrcpyCore.h"
 #include "decoder/decoder.h"
