@@ -46,7 +46,7 @@ private:
 
 private:
     VideoBuffer *m_vb = Q_NULLPTR;
-    AVCodecContext *m_codecCtx = Q_NULLPTR;
+    
     std::unique_ptr<AVCodecContext, AVCodecContextDeleter> m_codecCtx;
     
     bool m_isCodecCtxOpen = false;
