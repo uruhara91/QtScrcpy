@@ -1,7 +1,10 @@
 #include "qyuvopenglwidget.h"
 #include <QDebug>
 #include <QOpenGLFunctions>
+
+extern "C" {
 #include <libavutil/imgutils.h>
+}
 
 static const char *vertShader = R"(#version 450 core
 layout(location = 0) in vec3 vertexIn;
