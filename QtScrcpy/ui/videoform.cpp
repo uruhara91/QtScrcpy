@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QWindow>
 #include <QtWidgets/QHBoxLayout>
+#include <span>
 
 #if defined(Q_OS_WIN32)
 #include <Windows.h>
@@ -157,11 +158,11 @@ void VideoForm::showFPS(bool show)
     m_fpsLabel->setVisible(show);
 }
 
-void VideoForm::updateRender(width, height, 
-                                       const_cast<uint8_t*>(dataY.data()), 
-                                       const_cast<uint8_t*>(dataU.data()), 
-                                       const_cast<uint8_t*>(dataV.data()), 
-                                       linesizeY, linesizeU, linesizeV)
+void VideoForm::updateRender(int width, int height, 
+                             std::span<const uint8_t> dataY, 
+                             std::span<const uint8_t> dataU, 
+                             std::span<const uint8_t> dataV, 
+                             int linesizeY, int linesizeU, int linesizeV)
 {
     if (m_videoWidget->isHidden()) {
         if (m_loadingWidget) {
@@ -171,13 +172,10 @@ void VideoForm::updateRender(width, height,
     }
 
     updateShowSize(QSize(width, height));
-    m_videoWidget->setFrameSize(QSize(width, height));
 
     m_videoWidget->setFrameData(width, height, 
                                 dataY, dataU, dataV, 
                                 linesizeY, linesizeU, linesizeV);
-
-    m_videoWidget->update(); 
 }
 
 void VideoForm::setSerial(const QString &serial)
@@ -185,7 +183,7 @@ void VideoForm::setSerial(const QString &serial)
     m_serial = serial;
 
     // --- SW PBO ---
-    // 1. Ambil device interface
+    // 1. Device interface
     auto deviceInterface = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (!deviceInterface) {
         return;
