@@ -48,6 +48,8 @@ private:
     void deInitPBOs();
     
     void renderFrame(const AVFrame *frame);
+    
+    void setFrameSize(const QSize &frameSize);
 
 private:
     QSize m_frameSize = { -1, -1 };
