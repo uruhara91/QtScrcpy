@@ -26,8 +26,9 @@ class Decoder : public QObject
 public:
     Decoder(std::function<void(int width, int height, 
                                std::span<const uint8_t> dataY, 
-                               std::span<const uint8_t> dataUV,
-                               int linesizeY, int linesizeUV)> onFrame,
+                               std::span<const uint8_t> dataU, 
+                               std::span<const uint8_t> dataV, 
+                               int linesizeY, int linesizeU, int linesizeV)> onFrame, 
             QObject *parent = Q_NULLPTR);
 
     virtual ~Decoder();
@@ -61,7 +62,8 @@ private:
     std::function<void(int, int, 
                        std::span<const uint8_t>, 
                        std::span<const uint8_t>, 
-                       int, int)> m_onFrame;
+                       std::span<const uint8_t>, 
+                       int, int, int)> m_onFrame;
 };
 
 #endif // DECODER_H

@@ -138,9 +138,11 @@ void Demuxer::run()
     }
     m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
     m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
+    m_codecCtx->thread_count = 1;
+    m_codecCtx->thread_type = FF_THREAD_SLICE;
     m_codecCtx->width = m_frameSize.width();
     m_codecCtx->height = m_frameSize.height();
-    m_codecCtx->pix_fmt = AV_PIX_FMT_NV12;
+    m_codecCtx->pix_fmt = AV_PIX_FMT_YUV420P;
 
     m_parser = av_parser_init(AV_CODEC_ID_H264);
     if (!m_parser) {
