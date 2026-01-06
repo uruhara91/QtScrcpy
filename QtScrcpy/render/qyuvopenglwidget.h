@@ -7,6 +7,7 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 #include <span>
+#include <atomic>
 
 class VideoBuffer;
 struct AVFrame;
@@ -21,7 +22,6 @@ public:
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
 
-    void setFrameSize(const QSize &frameSize);
     void setFrameData(int width, int height, 
                       std::span<const uint8_t> dataY, 
                       std::span<const uint8_t> dataU, 
@@ -31,6 +31,9 @@ public:
     void setVideoBuffer(VideoBuffer *vb);
     void updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV);
 
+signals:
+    void requestUpdateTextures(int width, int height);
+
 protected:
     void initializeGL() override;
     void paintGL() override;
@@ -38,6 +41,7 @@ protected:
 
 private:
     void initShader();
+
     void initTextures(int width, int height);
     void deInitTextures();
     
@@ -58,11 +62,12 @@ private:
 
     GLuint m_pbos[2][3] = {{0,0,0}, {0,0,0}};
     void* m_pboMappedPtrs[2][3] = {{nullptr, nullptr, nullptr}, {nullptr, nullptr, nullptr}};
-    
     int m_pboIndex = 0;
     bool m_pboSizeValid = false;
-
     bool m_isInitialized = false;
+
+    std::atomic<int> m_pboIndex = 0;
+    std::atomic<bool> m_textureSizeMismatch = false;
 };
 
 #endif // QYUVOPENGLWIDGET_H

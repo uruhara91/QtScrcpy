@@ -72,14 +72,19 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
                                    std::span<const uint8_t> dataV, 
                                    int linesizeY, int linesizeU, int linesizeV)
 {
-    if (width != m_frameSize.width() || height != m_frameSize.height() || !m_pboSizeValid) {
-        setFrameSize(QSize(width, height));
-        initPBOs(width, height);
-        initTextures(width, height);
+    // 1. Cek Resize
+    if (width != m_frameSize.width() || height != m_frameSize.height()) {
+        if (!m_textureSizeMismatch) {
+            m_textureSizeMismatch = true;
+            emit requestUpdateTextures(width, height);
+        }
+        return;
     }
 
+    if (!m_pboSizeValid || m_textureSizeMismatch) return;
+
+    // 2. Atomic Index Swap
     int uploadIndex = (m_pboIndex + 1) % 2;
-    m_pboIndex = uploadIndex; 
 
     const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
     int srcLinesizes[3] = { linesizeY, linesizeU, linesizeV };
@@ -87,7 +92,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     int heights[3] = { height, height / 2, height / 2 };
 
     for (int i = 0; i < 3; i++) {
-        uint8_t* dstPtr = (uint8_t*)m_pboMappedPtrs[uploadIndex][i];
+        uint8_t* dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
         
         if (dstPtr && srcData[i]) {
             size_t requiredSize = static_cast<size_t>(srcLinesizes[i] * heights[i]);
@@ -98,8 +103,11 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
             }
         }
     }
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-    update();
+
+    // 3. Commit Index & Update
+    m_pboIndex = uploadIndex;
+
+    QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
 }
 
 void QYuvOpenGLWidget::initializeGL() {
@@ -141,6 +149,17 @@ void QYuvOpenGLWidget::initializeGL() {
     m_vao.release();
     
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h){
+        makeCurrent();
+        setFrameSize(QSize(w, h));
+        initPBOs(w, h);
+        initTextures(w, h);
+        m_textureSizeMismatch = false;
+        doneCurrent();
+    }, Qt::QueuedConnection);
 }
 
 void QYuvOpenGLWidget::initShader() {
