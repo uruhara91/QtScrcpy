@@ -12,7 +12,7 @@ void AVCodecContextDeleter::operator()(AVCodecContext* ctx) const {
     }
 }
 
-Decoder::Decoder(std::function<void(int, int, std::span<const uint8_t>, std::span<const uint8_t>, std::span<const uint8_t>, int, int, int)> onFrame, QObject *parent)
+Decoder::Decoder(std::function<void(int, int, std::span<const uint8_t>, std::span<const uint8_t>, int, int)> onFrame, QObject *parent)
     : QObject(parent)
     , m_vb(new VideoBuffer())
     , m_onFrame(onFrame)
@@ -118,14 +118,22 @@ void Decoder::onNewFrame()
     m_vb->lock();
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     
-    if (m_onFrame && frame) {
+    if (m_onFrame && frame && frame->format == AV_PIX_FMT_NV12) {
+         
+         // 1. Ambil Plane Y
          std::span<const uint8_t> spanY(frame->data[0], frame->linesize[0] * frame->height);
-         std::span<const uint8_t> spanU(frame->data[1], (frame->linesize[1] * frame->height) / 2);
-         std::span<const uint8_t> spanV(frame->data[2], (frame->linesize[2] * frame->height) / 2);
+         
+         // 2. Ambil Plane UV (Interleaved)
+         std::span<const uint8_t> spanUV(frame->data[1], frame->linesize[1] * (frame->height / 2));
 
+         // 3. Callback dengan 2 plane
          m_onFrame(frame->width, frame->height,
-                   spanY, spanU, spanV,
-                   frame->linesize[0], frame->linesize[1], frame->linesize[2]);
+                   spanY, spanUV,
+                   frame->linesize[0], frame->linesize[1]);
+                   
+    } else if (m_onFrame && frame) {
+        qWarning() << "Decoder output mismatch! Expected NV12, got:" << frame->format;
     }
+    
     m_vb->unLock();
 }
