@@ -47,7 +47,21 @@ void main(void) {
 }
 )";
 
-QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {}
+QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
+    connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h){
+        if (isValid()) {
+            makeCurrent();
+            setFrameSize(QSize(w, h));
+            initPBOs(w, h);
+            initTextures(w, h);
+            m_textureSizeMismatch = false;
+            doneCurrent();
+            update(); 
+        } else {
+            m_textureSizeMismatch = false;
+        }
+    }, Qt::QueuedConnection);
+}
 
 QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     makeCurrent();
@@ -79,6 +93,11 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
                                    std::span<const uint8_t> dataV, 
                                    int linesizeY, int linesizeU, int linesizeV)
 {
+    // Notify VideoBuffer
+    if (m_vb) {
+        m_vb->consumeRenderedFrame(); 
+    }
+    
     // 1. Cek Resize
     if (width != m_frameSize.width() || height != m_frameSize.height()) {
         if (!m_textureSizeMismatch) {
@@ -112,10 +131,6 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
 
     // 3. Commit Index & Update
     m_pboIndex = uploadIndex;
-
-    if (m_vb) {
-        m_vb->consumeRenderedFrame(); 
-    }
 
     QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
 }
@@ -161,15 +176,6 @@ void QYuvOpenGLWidget::initializeGL() {
 
     // Set global alignment
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-    connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h){
-        makeCurrent();
-        setFrameSize(QSize(w, h));
-        initPBOs(w, h);
-        initTextures(w, h);
-        m_textureSizeMismatch = false;
-        doneCurrent();
-    }, Qt::QueuedConnection);
 }
 
 void QYuvOpenGLWidget::initShader() {
