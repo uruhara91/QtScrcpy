@@ -4,6 +4,7 @@
 #include <QPointer>
 #include <QWidget>
 #include <span>
+#include <atomic>
 
 #include "../QtScrcpyCore/include/QtScrcpyCore.h"
 
@@ -99,7 +100,8 @@ private:
 
     bool show_toolbar = true; 
     bool m_isFullScreen = false;
-    bool m_framelessWindow = false; 
+    bool m_framelessWindow = false;
+    std::atomic<bool> m_resizePending = false;
 };
 
 #endif // VIDEOFORM_H

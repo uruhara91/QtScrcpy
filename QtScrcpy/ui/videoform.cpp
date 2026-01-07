@@ -167,7 +167,9 @@ void VideoForm::updateRender(int width, int height,
                              int linesizeY, int linesizeU, int linesizeV)
 {
     // 1. SAFETY CHECK
-    if (m_frameSize.width() != width || m_frameSize.height() != height) {
+    if ((m_frameSize.width() != width || m_frameSize.height() != height) && !m_resizePending) {
+        m_resizePending = true;
+        
         QMetaObject::invokeMethod(this, [this, width, height](){
             if (m_videoWidget && m_videoWidget.data()->isHidden()) {
                 if (m_loadingWidget) {
@@ -176,10 +178,11 @@ void VideoForm::updateRender(int width, int height,
                 m_videoWidget.data()->show();
             }
             updateShowSize(QSize(width, height));
+            m_resizePending = false;
         }, Qt::QueuedConnection);
     }
 
-    // 2. Update Frame Data
+    // 2. DATA TRANSFER
     if (m_videoWidget) {
         m_videoWidget.data()->setFrameData(width, height, 
                                            dataY, dataU, dataV, 

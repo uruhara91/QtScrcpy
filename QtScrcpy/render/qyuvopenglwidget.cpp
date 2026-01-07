@@ -92,12 +92,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
                                    std::span<const uint8_t> dataU, 
                                    std::span<const uint8_t> dataV, 
                                    int linesizeY, int linesizeU, int linesizeV)
-{
-    // Notify VideoBuffer
-    if (m_vb) {
-        m_vb->consumeRenderedFrame(); 
-    }
-    
+{   
     // 1. Cek Resize
     if (width != m_frameSize.width() || height != m_frameSize.height()) {
         if (!m_textureSizeMismatch) {
