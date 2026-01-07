@@ -111,6 +111,10 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     // 3. Commit Index & Update
     m_pboIndex = uploadIndex;
 
+    if (m_vb) {
+        m_vb->consumeRenderedFrame(); 
+    }
+
     QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
 }
 

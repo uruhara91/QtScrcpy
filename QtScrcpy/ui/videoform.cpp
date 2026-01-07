@@ -166,15 +166,20 @@ void VideoForm::updateRender(int width, int height,
                              std::span<const uint8_t> dataV, 
                              int linesizeY, int linesizeU, int linesizeV)
 {
-    if (m_videoWidget && m_videoWidget.data()->isHidden()) {
-        if (m_loadingWidget) {
-            m_loadingWidget->close();
-        }
-        m_videoWidget.data()->show();
+    // 1. SAFETY CHECK
+    if (m_frameSize.width() != width || m_frameSize.height() != height) {
+        QMetaObject::invokeMethod(this, [this, width, height](){
+            if (m_videoWidget && m_videoWidget.data()->isHidden()) {
+                if (m_loadingWidget) {
+                    m_loadingWidget->close();
+                }
+                m_videoWidget.data()->show();
+            }
+            updateShowSize(QSize(width, height));
+        }, Qt::QueuedConnection);
     }
 
-    updateShowSize(QSize(width, height));
-
+    // 2. Update Frame Data
     if (m_videoWidget) {
         m_videoWidget.data()->setFrameData(width, height, 
                                            dataY, dataU, dataV, 
