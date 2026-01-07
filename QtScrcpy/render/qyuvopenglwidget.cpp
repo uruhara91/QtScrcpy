@@ -259,8 +259,11 @@ void QYuvOpenGLWidget::resizeGL(int width, int height) {
 }
 
 void QYuvOpenGLWidget::paintGL() {
-    if (!m_pboSizeValid) return;
-
+    if (!m_pboSizeValid) {
+        qDebug() << "Paint skip: PBO invalid";
+        return;
+    }
+    
     int drawIndex = m_pboIndex;
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
     int heights[3] = {m_frameSize.height(), m_frameSize.height() / 2, m_frameSize.height() / 2};
