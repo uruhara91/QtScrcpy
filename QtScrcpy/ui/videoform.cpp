@@ -166,23 +166,28 @@ void VideoForm::updateRender(int width, int height,
                              std::span<const uint8_t> dataV, 
                              int linesizeY, int linesizeU, int linesizeV)
 {
-    // 1. SAFETY CHECK
-    if ((m_frameSize.width() != width || m_frameSize.height() != height) && !m_resizePending) {
-        m_resizePending = true;
-        
-        QMetaObject::invokeMethod(this, [this, width, height](){
-            if (m_videoWidget && m_videoWidget.data()->isHidden()) {
-                if (m_loadingWidget) {
-                    m_loadingWidget->close();
-                }
+    // 1. FAILSAFE
+    if (m_videoWidget && m_videoWidget.data()->isHidden()) {
+        QMetaObject::invokeMethod(this, [this](){
+            if (m_videoWidget) {
+                if (m_loadingWidget) m_loadingWidget->close();
                 m_videoWidget.data()->show();
             }
-            updateShowSize(QSize(width, height));
-            m_resizePending = false;
         }, Qt::QueuedConnection);
     }
 
-    // 2. DATA TRANSFER
+    // 2. RESIZE LOGIC
+    if ((m_frameSize.width() != width || m_frameSize.height() != height) && !m_resizePending) {
+        m_resizePending = true; // Kunci pintu antrian
+        
+        QMetaObject::invokeMethod(this, [this, width, height](){
+            // Logika UI (Main Thread)
+            updateShowSize(QSize(width, height));
+            m_resizePending = false; // Buka kunci
+        }, Qt::QueuedConnection);
+    }
+
+    // 3. DATA TRANSFER
     if (m_videoWidget) {
         m_videoWidget.data()->setFrameData(width, height, 
                                            dataY, dataU, dataV, 

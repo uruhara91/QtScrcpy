@@ -56,9 +56,9 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
             initTextures(w, h);
             m_textureSizeMismatch = false;
             doneCurrent();
-            update(); 
+            update();
         } else {
-            m_textureSizeMismatch = false;
+            m_textureSizeMismatch = false; 
         }
     }, Qt::QueuedConnection);
 }
@@ -92,7 +92,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
                                    std::span<const uint8_t> dataU, 
                                    std::span<const uint8_t> dataV, 
                                    int linesizeY, int linesizeU, int linesizeV)
-{   
+{
     // 1. Cek Resize
     if (width != m_frameSize.width() || height != m_frameSize.height()) {
         if (!m_textureSizeMismatch) {
@@ -104,7 +104,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
 
     if (!m_pboSizeValid || m_textureSizeMismatch) return;
 
-    // 2. Atomic Index Swap
+    // 2. Atomic Index Swap & Copy
     int uploadIndex = (m_pboIndex + 1) % 2;
 
     const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
@@ -113,12 +113,8 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     int heights[3] = { height, height / 2, height / 2 };
 
     for (int i = 0; i < 3; i++) {
-        // Safety Check:
         if (!m_pboMappedPtrs[uploadIndex][i]) continue;
-
         uint8_t* dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
-        
-        // Safety Check:
         if (srcData[i]) {
             av_image_copy_plane(dstPtr, widths[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
         }
@@ -263,7 +259,7 @@ void QYuvOpenGLWidget::paintGL() {
         qDebug() << "Paint skip: PBO invalid";
         return;
     }
-    
+
     int drawIndex = m_pboIndex;
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
     int heights[3] = {m_frameSize.height(), m_frameSize.height() / 2, m_frameSize.height() / 2};
