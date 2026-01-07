@@ -25,6 +25,11 @@ public:
     explicit VideoForm(bool framelessWindow = false, bool skin = true, bool showToolBar = true, QWidget *parent = Q_NULLPTR);
     ~VideoForm();
 
+    void updateRender(int width, int height, 
+                      std::span<const uint8_t> dataY, 
+                      std::span<const uint8_t> dataU, 
+                      std::span<const uint8_t> dataV, 
+                      int linesizeY, int linesizeU, int linesizeV);
     void staysOnTop(bool top = true);
     void updateShowSize(const QSize &newSize);
     void setSerial(const QString& serial);
@@ -35,14 +40,6 @@ public:
     void showFPS(bool show);
     void switchFullScreen();
     bool isHost();
-
-    void updateRender(int width, int height, 
-                      std::span<const uint8_t> dataY, 
-                      std::span<const uint8_t> dataU, 
-                      std::span<const uint8_t> dataV, 
-                      int linesizeY, int linesizeU, int linesizeV);
-
-    const QSize &frameSize();
 
 private:
     // DeviceObserver implementation
@@ -56,7 +53,7 @@ private:
 
     void updateStyleSheet(bool vertical);
     QMargins getMargins(bool vertical);
-    
+
     void initUI();
     void showToolForm(bool show = true);
     void moveCenter();
