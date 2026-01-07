@@ -2,6 +2,8 @@
 #include <QDebug>
 #include <QOpenGLFunctions>
 
+#include "../QtScrcpyCore/src/device/decoder/videobuffer.h"
+
 extern "C" {
 #include <libavutil/imgutils.h>
 }
