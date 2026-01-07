@@ -16,6 +16,7 @@ void main(void) {
 }
 )";
 
+// Baked Math
 static const char *fragShader = R"(#version 450 core
 in vec2 textureOut;
 out vec4 FragColor;
@@ -27,17 +28,18 @@ layout(binding = 2) uniform sampler2D tex_v;
 
 void main(void) {
     vec3 yuv;
-    vec3 rgb;
     
-    yuv.x = texture(tex_y, textureOut).r - 0.0627;
-    yuv.y = texture(tex_u, textureOut).r - 0.5;
-    yuv.z = texture(tex_v, textureOut).r - 0.5;
+    // Sampling
+    yuv.x = texture(tex_y, textureOut).r;
+    yuv.y = texture(tex_u, textureOut).r;
+    yuv.z = texture(tex_v, textureOut).r;
     
-    rgb = mat3(
+    // Conversion Matrix
+    vec3 rgb = mat3(
         1.164,  1.164,  1.164,
         0.0,   -0.391,  2.018,
         1.596, -0.813,  0.0
-    ) * yuv;
+    ) * yuv - vec3(0.871, -0.529, 1.082);
     
     FragColor = vec4(rgb, 1.0);
 }
@@ -95,15 +97,14 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     int heights[3] = { height, height / 2, height / 2 };
 
     for (int i = 0; i < 3; i++) {
+        // Safety Check:
+        if (!m_pboMappedPtrs[uploadIndex][i]) continue;
+
         uint8_t* dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
         
-        if (dstPtr && srcData[i]) {
-            size_t requiredSize = static_cast<size_t>(srcLinesizes[i] * heights[i]);
-            size_t actualSize = (i == 0) ? dataY.size() : (i == 1 ? dataU.size() : dataV.size());
-
-            if (actualSize >= requiredSize) {
-                av_image_copy_plane(dstPtr, widths[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
-            }
+        // Safety Check:
+        if (srcData[i]) {
+            av_image_copy_plane(dstPtr, widths[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
         }
     }
 
@@ -126,7 +127,6 @@ void QYuvOpenGLWidget::initializeGL() {
     context()->setFormat(format);
 
     initShader();
-    // initTextures();
 
     static const GLfloat coordinate[] = {
         -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
@@ -153,6 +153,7 @@ void QYuvOpenGLWidget::initializeGL() {
     
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
+    // Set global alignment
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
     connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h){
@@ -201,6 +202,7 @@ void QYuvOpenGLWidget::initTextures(int width, int height) {
 void QYuvOpenGLWidget::initPBOs(int width, int height) {
     deInitPBOs();
     
+    // Tightly packed sizes
     int sizes[3] = {
         width * height,             // Y
         (width / 2) * (height / 2), // U
@@ -209,6 +211,7 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
 
     glCreateBuffers(6, &m_pbos[0][0]); 
 
+    // Persistent mapping
     GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
 
     for (int set = 0; set < 2; set++) {
@@ -217,7 +220,6 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
             m_pboMappedPtrs[set][plane] = glMapNamedBufferRange(m_pbos[set][plane], 0, sizes[plane], flags);
         }
     }
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     m_pboSizeValid = true;
 }
 
@@ -256,11 +258,13 @@ void QYuvOpenGLWidget::paintGL() {
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
     int heights[3] = {m_frameSize.height(), m_frameSize.height() / 2, m_frameSize.height() / 2};
 
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
     m_program.bind();
     QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
 
     for (int i = 0; i < 3; i++) {
-        // Bind Unit Tekstur
+        // Bind and Transfer
         glBindTextureUnit(i, m_textures[i]);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
         glTextureSubImage2D(m_textures[i], 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
