@@ -138,11 +138,11 @@ void QYuvOpenGLWidget::initializeGL() {
     format.setSwapInterval(0);
     context()->setFormat(format);
 
-    // glDisable(GL_DEPTH_TEST);
-    // glDepthMask(GL_FALSE);
-    // glDisable(GL_STENCIL_TEST);
-    // glDisable(GL_BLEND);
-    // glDisable(GL_DITHER);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_DITHER);
 
     initShader();
 
