@@ -43,7 +43,7 @@ int main(int argc, char *argv[])
 #ifdef Q_OS_LINUX
     // Only set environment variables if they are not already set (e.g., by AppImage AppRun)
     if (qgetenv("QTSCRCPY_ADB_PATH").isEmpty()) {
-        qputenv("QTSCRCPY_ADB_PATH", "../../../QtScrcpy/QtScrcpyCore/src/third_party/adb/linux/adb");
+        qputenv("QTSCRCPY_ADB_PATH", "/usr/bin/adb");
     }
     if (qgetenv("QTSCRCPY_SERVER_PATH").isEmpty()) {
         qputenv("QTSCRCPY_SERVER_PATH", "../../../QtScrcpy/QtScrcpyCore/src/third_party/scrcpy-server");
