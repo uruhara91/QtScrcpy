@@ -56,7 +56,7 @@ void Decoder::close()
         return;
     }
     if (m_isCodecCtxOpen) {
-        avcodec_free_context(m_codecCtx);
+        avcodec_free_context(&m_codecCtx);
     }
     avcodec_free_context(&m_codecCtx);
 }
