@@ -2,6 +2,8 @@
 #include <QDebug>
 #include <QOpenGLFunctions>
 
+#include "../QtScrcpyCore/src/device/decoder/videobuffer.h"
+
 extern "C" {
 #include <libavutil/imgutils.h>
 }
@@ -45,7 +47,21 @@ void main(void) {
 }
 )";
 
-QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {}
+QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
+    connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h){
+        if (isValid()) {
+            makeCurrent();
+            setFrameSize(QSize(w, h));
+            initPBOs(w, h);
+            initTextures(w, h);
+            m_textureSizeMismatch = false;
+            doneCurrent();
+            update();
+        } else {
+            m_textureSizeMismatch = false; 
+        }
+    }, Qt::QueuedConnection);
+}
 
 QYuvOpenGLWidget::~QYuvOpenGLWidget() {
     makeCurrent();
@@ -88,7 +104,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
 
     if (!m_pboSizeValid || m_textureSizeMismatch) return;
 
-    // 2. Atomic Index Swap
+    // 2. Atomic Index Swap & Copy
     int uploadIndex = (m_pboIndex + 1) % 2;
 
     const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
@@ -97,12 +113,8 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     int heights[3] = { height, height / 2, height / 2 };
 
     for (int i = 0; i < 3; i++) {
-        // Safety Check:
         if (!m_pboMappedPtrs[uploadIndex][i]) continue;
-
         uint8_t* dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
-        
-        // Safety Check:
         if (srcData[i]) {
             av_image_copy_plane(dstPtr, widths[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
         }
@@ -125,6 +137,12 @@ void QYuvOpenGLWidget::initializeGL() {
     QSurfaceFormat format = this->format();
     format.setSwapInterval(0);
     context()->setFormat(format);
+
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_DITHER);
 
     initShader();
 
@@ -155,15 +173,6 @@ void QYuvOpenGLWidget::initializeGL() {
 
     // Set global alignment
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-    connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h){
-        makeCurrent();
-        setFrameSize(QSize(w, h));
-        initPBOs(w, h);
-        initTextures(w, h);
-        m_textureSizeMismatch = false;
-        doneCurrent();
-    }, Qt::QueuedConnection);
 }
 
 void QYuvOpenGLWidget::initShader() {
@@ -252,7 +261,9 @@ void QYuvOpenGLWidget::resizeGL(int width, int height) {
 }
 
 void QYuvOpenGLWidget::paintGL() {
-    if (!m_pboSizeValid) return;
+    if (!m_pboSizeValid) {
+        return;
+    }
 
     int drawIndex = m_pboIndex;
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};

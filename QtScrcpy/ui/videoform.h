@@ -4,6 +4,7 @@
 #include <QPointer>
 #include <QWidget>
 #include <span>
+#include <atomic>
 
 #include "../QtScrcpyCore/include/QtScrcpyCore.h"
 
@@ -24,15 +25,13 @@ public:
     explicit VideoForm(bool framelessWindow = false, bool skin = true, bool showToolBar = true, QWidget *parent = Q_NULLPTR);
     ~VideoForm();
 
-    void staysOnTop(bool top = true);
-    void updateShowSize(const QSize &newSize);
-    
-    // Legacy support
     void updateRender(int width, int height, 
                       std::span<const uint8_t> dataY, 
                       std::span<const uint8_t> dataU, 
                       std::span<const uint8_t> dataV, 
                       int linesizeY, int linesizeU, int linesizeV);
+    void staysOnTop(bool top = true);
+    void updateShowSize(const QSize &newSize);
     void setSerial(const QString& serial);
     QRect getGrabCursorRect();
     const QSize &frameSize();
@@ -54,8 +53,8 @@ private:
 
     void updateStyleSheet(bool vertical);
     QMargins getMargins(bool vertical);
-    void initUI();
 
+    void initUI();
     void showToolForm(bool show = true);
     void moveCenter();
     void installShortcut();
@@ -99,7 +98,9 @@ private:
 
     bool show_toolbar = true; 
     bool m_isFullScreen = false;
-    bool m_framelessWindow = false; 
+    bool m_framelessWindow = false;
+
+    std::atomic<bool> m_resizePending = false;
 };
 
 #endif // VIDEOFORM_H

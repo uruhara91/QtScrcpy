@@ -18,7 +18,7 @@ Decoder::Decoder(std::function<void(int, int, std::span<const uint8_t>, std::spa
     , m_onFrame(onFrame)
 {
     m_vb->init();
-    connect(this, &Decoder::newFrame, this, &Decoder::onNewFrame, Qt::QueuedConnection);
+    connect(this, &Decoder::newFrame, this, &Decoder::onNewFrame, Qt::DirectConnection);
     connect(m_vb, &VideoBuffer::updateFPS, this, &Decoder::updateFPS);
 }
 
