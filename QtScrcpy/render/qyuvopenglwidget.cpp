@@ -1,291 +1,277 @@
+#include <QCoreApplication>
+#include <QOpenGLTexture>
+#include <QSurfaceFormat>
+
 #include "qyuvopenglwidget.h"
-#include <QDebug>
-#include <QOpenGLFunctions>
 
-#include "../QtScrcpyCore/src/device/decoder/videobuffer.h"
+// 存储顶点坐标和纹理坐标
+// 存在一起缓存在vbo
+// 使用glVertexAttribPointer指定访问方式即可
+static const GLfloat coordinate[] = {
+    // 顶点坐标，存储4个xyz坐标
+    // 坐标范围为[-1,1],中心点为 0,0
+    // 二维图像z始终为0
+    // GL_TRIANGLE_STRIP的绘制方式：
+    // 使用前3个坐标绘制一个三角形，使用后三个坐标绘制一个三角形，正好为一个矩形
+    // x     y     z
+    -1.0f,
+    -1.0f,
+    0.0f,
+    1.0f,
+    -1.0f,
+    0.0f,
+    -1.0f,
+    1.0f,
+    0.0f,
+    1.0f,
+    1.0f,
+    0.0f,
 
-extern "C" {
-#include <libavutil/imgutils.h>
-}
+    // 纹理坐标，存储4个xy坐标
+    // 坐标范围为[0,1],左下角为 0,0
+    0.0f,
+    1.0f,
+    1.0f,
+    1.0f,
+    0.0f,
+    0.0f,
+    1.0f,
+    0.0f
+};
 
-static const char *vertShader = R"(#version 450 core
-layout(location = 0) in vec3 vertexIn;
-layout(location = 1) in vec2 textureIn;
-out vec2 textureOut;
-void main(void) {
-    gl_Position = vec4(vertexIn, 1.0);
-    textureOut = textureIn;
-}
+// 顶点着色器
+static const QString s_vertShader = R"(
+    attribute vec3 vertexIn;    // xyz顶点坐标
+    attribute vec2 textureIn;   // xy纹理坐标
+    varying vec2 textureOut;    // 传递给片段着色器的纹理坐标
+    void main(void)
+    {
+        gl_Position = vec4(vertexIn, 1.0);  // 1.0表示vertexIn是一个顶点位置
+        textureOut = textureIn; // 纹理坐标直接传递给片段着色器
+    }
 )";
 
-// Baked Math
-static const char *fragShader = R"(#version 450 core
-in vec2 textureOut;
-out vec4 FragColor;
+// 片段着色器
+static QString s_fragShader = R"(
+    varying vec2 textureOut;        // 由顶点着色器传递过来的纹理坐标
+    uniform sampler2D textureY;     // uniform 纹理单元，利用纹理单元可以使用多个纹理
+    uniform sampler2D textureU;     // sampler2D是2D采样器
+    uniform sampler2D textureV;     // 声明yuv三个纹理单元
+    void main(void)
+    {
+        vec3 yuv;
+        vec3 rgb;
 
-// Binding
-layout(binding = 0) uniform sampler2D tex_y;
-layout(binding = 1) uniform sampler2D tex_u;
-layout(binding = 2) uniform sampler2D tex_v;
+        // SDL2 BT709_SHADER_CONSTANTS
+        // https://github.com/spurious/SDL-mirror/blob/4ddd4c445aa059bb127e101b74a8c5b59257fbe2/src/render/opengl/SDL_shaders_gl.c#L102
+        const vec3 Rcoeff = vec3(1.1644,  0.000,  1.7927);
+        const vec3 Gcoeff = vec3(1.1644, -0.2132, -0.5329);
+        const vec3 Bcoeff = vec3(1.1644,  2.1124,  0.000);
 
-void main(void) {
-    vec3 yuv;
-    
-    // Sampling
-    yuv.x = texture(tex_y, textureOut).r;
-    yuv.y = texture(tex_u, textureOut).r;
-    yuv.z = texture(tex_v, textureOut).r;
-    
-    // Conversion Matrix
-    vec3 rgb = mat3(
-        1.164,  1.164,  1.164,
-        0.0,   -0.391,  2.018,
-        1.596, -0.813,  0.0
-    ) * yuv - vec3(0.871, -0.529, 1.082);
-    
-    FragColor = vec4(rgb, 1.0);
-}
+        // 根据指定的纹理textureY和坐标textureOut来采样
+        yuv.x = texture2D(textureY, textureOut).r;
+        yuv.y = texture2D(textureU, textureOut).r - 0.5;
+        yuv.z = texture2D(textureV, textureOut).r - 0.5;
+
+        // 采样完转为rgb
+        // 减少一些亮度
+        yuv.x = yuv.x - 0.0625;
+        rgb.r = dot(yuv, Rcoeff);
+        rgb.g = dot(yuv, Gcoeff);
+        rgb.b = dot(yuv, Bcoeff);
+        // 输出颜色值
+        gl_FragColor = vec4(rgb, 1.0);
+    }
 )";
 
-QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
-    connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h){
-        if (isValid()) {
-            makeCurrent();
-            setFrameSize(QSize(w, h));
-            initPBOs(w, h);
-            initTextures(w, h);
-            m_textureSizeMismatch = false;
-            doneCurrent();
-            update();
-        } else {
-            m_textureSizeMismatch = false; 
-        }
-    }, Qt::QueuedConnection);
+QYUVOpenGLWidget::QYUVOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent)
+{
+    /*
+    QSurfaceFormat format = QSurfaceFormat::defaultFormat();
+    format.setColorSpace(QSurfaceFormat::sRGBColorSpace);
+    format.setProfile(QSurfaceFormat::CompatibilityProfile);
+    format.setMajorVersion(3);
+    format.setMinorVersion(2);
+    QSurfaceFormat::setDefaultFormat(format);
+    */
 }
 
-QYuvOpenGLWidget::~QYuvOpenGLWidget() {
+QYUVOpenGLWidget::~QYUVOpenGLWidget()
+{
     makeCurrent();
+    m_vbo.destroy();
     deInitTextures();
-    deInitPBOs();
-    if (m_vao.isCreated()) m_vao.destroy();
-    if (m_vbo.isCreated()) m_vbo.destroy();
     doneCurrent();
-}   
-
-QSize QYuvOpenGLWidget::minimumSizeHint() const { return QSize(50, 50); }
-QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize; }
-
-const QSize &QYuvOpenGLWidget::frameSize() { 
-    return m_frameSize; 
 }
 
-void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
+QSize QYUVOpenGLWidget::minimumSizeHint() const
+{
+    return QSize(50, 50);
+}
+
+QSize QYUVOpenGLWidget::sizeHint() const
+{
+    return size();
+}
+
+void QYUVOpenGLWidget::setFrameSize(const QSize &frameSize)
+{
     if (m_frameSize != frameSize) {
         m_frameSize = frameSize;
-        updateGeometry();
-        m_pboSizeValid = false;
+        m_needUpdate = true;
+        // inittexture immediately
+        repaint();
     }
 }
 
-void QYuvOpenGLWidget::setFrameData(int width, int height, 
-                                   std::span<const uint8_t> dataY, 
-                                   std::span<const uint8_t> dataU, 
-                                   std::span<const uint8_t> dataV, 
-                                   int linesizeY, int linesizeU, int linesizeV)
+const QSize &QYUVOpenGLWidget::frameSize()
 {
-    // 1. Cek Resize
-    if (width != m_frameSize.width() || height != m_frameSize.height()) {
-        if (!m_textureSizeMismatch) {
-            m_textureSizeMismatch = true;
-            emit requestUpdateTextures(width, height);
-        }
-        return;
-    }
-
-    if (!m_pboSizeValid || m_textureSizeMismatch) return;
-
-    // 2. Atomic Index Swap & Copy
-    int uploadIndex = (m_pboIndex + 1) % 2;
-
-    const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
-    int srcLinesizes[3] = { linesizeY, linesizeU, linesizeV };
-    int widths[3] = { width, width / 2, width / 2 };
-    int heights[3] = { height, height / 2, height / 2 };
-
-    for (int i = 0; i < 3; i++) {
-        if (!m_pboMappedPtrs[uploadIndex][i]) continue;
-        uint8_t* dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
-        if (srcData[i]) {
-            av_image_copy_plane(dstPtr, widths[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
-        }
-    }
-
-    // 3. Commit Index & Update
-    m_pboIndex = uploadIndex;
-
-    QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
+    return m_frameSize;
 }
 
-void QYuvOpenGLWidget::initializeGL() {
-    if (initializeOpenGLFunctions()) {
-        m_isInitialized = true;
-    } else {
-        qCritical() << "Initialize OpenGL Functions failed!";
-        return;
+void QYUVOpenGLWidget::updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV)
+{
+    if (m_textureInited) {
+        updateTexture(m_texture[0], 0, dataY, linesizeY);
+        updateTexture(m_texture[1], 1, dataU, linesizeU);
+        updateTexture(m_texture[2], 2, dataV, linesizeV);
+        update();
     }
-    
-    QSurfaceFormat format = this->format();
-    format.setSwapInterval(0);
-    context()->setFormat(format);
+}
 
+void QYUVOpenGLWidget::initializeGL()
+{
+    initializeOpenGLFunctions();
     glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
-    glDisable(GL_STENCIL_TEST);
-    glDisable(GL_BLEND);
-    glDisable(GL_DITHER);
 
-    initShader();
-
-    static const GLfloat coordinate[] = {
-        -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
-         1.0f, -1.0f, 0.0f,   1.0f, 1.0f,
-        -1.0f,  1.0f, 0.0f,   0.0f, 0.0f,
-         1.0f,  1.0f, 0.0f,   1.0f, 0.0f
-    };
-
-    m_vao.create();
-    m_vao.bind();
+    // 顶点缓冲对象初始化
     m_vbo.create();
     m_vbo.bind();
     m_vbo.allocate(coordinate, sizeof(coordinate));
-    
-    m_program.bind();
-    m_program.enableAttributeArray("vertexIn");
-    m_program.setAttributeBuffer("vertexIn", GL_FLOAT, 0, 3, 5 * sizeof(GLfloat));
-    m_program.enableAttributeArray("textureIn");
-    m_program.setAttributeBuffer("textureIn", GL_FLOAT, 3 * sizeof(GLfloat), 2, 5 * sizeof(GLfloat));
-    m_program.release();
-
-    m_vbo.release();
-    m_vao.release();
-    
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-
-    // Set global alignment
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    initShader();
+    // 设置背景清理色为黑色
+    glClearColor(0.0, 0.0, 0.0, 0.0);
+    // 清理颜色背景
+    glClear(GL_COLOR_BUFFER_BIT);
 }
 
-void QYuvOpenGLWidget::initShader() {
-    if (!m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader)) return;
-    if (!m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShader)) return;
-    if (!m_program.link()) return;
+void QYUVOpenGLWidget::paintGL()
+{
+    m_shaderProgram.bind();
 
-    m_program.bind();
-    m_program.setUniformValue("tex_y", 0);
-    m_program.setUniformValue("tex_u", 1);
-    m_program.setUniformValue("tex_v", 2);
-    m_program.release();
-}
-
-void QYuvOpenGLWidget::initTextures(int width, int height) {
-    if (!m_isInitialized) return;
-
-    if (m_textures[0] != 0) {
-        glDeleteTextures(3, m_textures);
+    if (m_needUpdate) {
+        deInitTextures();
+        initTextures();
+        m_needUpdate = false;
     }
 
-    glCreateTextures(GL_TEXTURE_2D, 3, m_textures);
+    if (m_textureInited) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_texture[0]);
 
-    int widths[3] = {width, width / 2, width / 2};
-    int heights[3] = {height, height / 2, height / 2};
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, m_texture[1]);
 
-    for (int i = 0; i < 3; i++) {
-        glTextureParameteri(m_textures[i], GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTextureParameteri(m_textures[i], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTextureStorage2D(m_textures[i], 1, GL_R8, widths[i], heights[i]);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, m_texture[2]);
+
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
+
+    m_shaderProgram.release();
 }
 
-void QYuvOpenGLWidget::initPBOs(int width, int height) {
-    deInitPBOs();
-    
-    // Tightly packed sizes
-    int sizes[3] = {
-        width * height,             // Y
-        (width / 2) * (height / 2), // U
-        (width / 2) * (height / 2)  // V
-    };
-
-    glCreateBuffers(6, &m_pbos[0][0]); 
-
-    // Persistent mapping
-    GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
-
-    for (int set = 0; set < 2; set++) {
-        for (int plane = 0; plane < 3; plane++) {
-            glNamedBufferStorage(m_pbos[set][plane], sizes[plane], nullptr, flags);
-            m_pboMappedPtrs[set][plane] = glMapNamedBufferRange(m_pbos[set][plane], 0, sizes[plane], flags);
-        }
-    }
-    m_pboSizeValid = true;
-}
-
-void QYuvOpenGLWidget::deInitTextures() {
-    if (!m_isInitialized) return;
-
-    if (m_textures[0] != 0) {
-        glDeleteTextures(3, m_textures);
-        memset(m_textures, 0, sizeof(m_textures));
-    }
-}
-
-void QYuvOpenGLWidget::deInitPBOs() {
-    if (!m_isInitialized) return;
-    for (int set = 0; set < 2; set++) {
-        for (int plane = 0; plane < 3; plane++) {
-            if (m_pbos[set][plane] != 0) {
-                glUnmapNamedBuffer(m_pbos[set][plane]); 
-                glDeleteBuffers(1, &m_pbos[set][plane]);
-                m_pbos[set][plane] = 0;
-                m_pboMappedPtrs[set][plane] = nullptr;
-            }
-        }
-    }
-    m_pboSizeValid = false;
-}
-
-void QYuvOpenGLWidget::resizeGL(int width, int height) {
+void QYUVOpenGLWidget::resizeGL(int width, int height)
+{
     glViewport(0, 0, width, height);
+    repaint();
 }
 
-void QYuvOpenGLWidget::paintGL() {
-    if (!m_pboSizeValid) {
+void QYUVOpenGLWidget::initShader()
+{
+    // opengles的float、int等要手动指定精度
+    if (QCoreApplication::testAttribute(Qt::AA_UseOpenGLES)) {
+        s_fragShader.prepend(R"(
+                             precision mediump int;
+                             precision mediump float;
+                             )");
+    }
+    m_shaderProgram.addShaderFromSourceCode(QOpenGLShader::Vertex, s_vertShader);
+    m_shaderProgram.addShaderFromSourceCode(QOpenGLShader::Fragment, s_fragShader);
+    m_shaderProgram.link();
+    m_shaderProgram.bind();
+
+    // 指定顶点坐标在vbo中的访问方式
+    // 参数解释：顶点坐标在shader中的参数名称，顶点坐标为float，起始偏移为0，顶点坐标类型为vec3，步幅为3个float
+    m_shaderProgram.setAttributeBuffer("vertexIn", GL_FLOAT, 0, 3, 3 * sizeof(float));
+    // 启用顶点属性
+    m_shaderProgram.enableAttributeArray("vertexIn");
+
+    // 指定纹理坐标在vbo中的访问方式
+    // 参数解释：纹理坐标在shader中的参数名称，纹理坐标为float，起始偏移为12个float（跳过前面存储的12个顶点坐标），纹理坐标类型为vec2，步幅为2个float
+    m_shaderProgram.setAttributeBuffer("textureIn", GL_FLOAT, 12 * sizeof(float), 2, 2 * sizeof(float));
+    m_shaderProgram.enableAttributeArray("textureIn");
+
+    // 关联片段着色器中的纹理单元和opengl中的纹理单元（opengl一般提供16个纹理单元）
+    m_shaderProgram.setUniformValue("textureY", 0);
+    m_shaderProgram.setUniformValue("textureU", 1);
+    m_shaderProgram.setUniformValue("textureV", 2);
+}
+
+void QYUVOpenGLWidget::initTextures()
+{
+    // 创建纹理
+    glGenTextures(1, &m_texture[0]);
+    glBindTexture(GL_TEXTURE_2D, m_texture[0]);
+    // 设置纹理缩放时的策略
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // 设置st方向上纹理超出坐标时的显示策略
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, m_frameSize.width(), m_frameSize.height(), 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, nullptr);
+
+    glGenTextures(1, &m_texture[1]);
+    glBindTexture(GL_TEXTURE_2D, m_texture[1]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, m_frameSize.width() / 2, m_frameSize.height() / 2, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, nullptr);
+
+    glGenTextures(1, &m_texture[2]);
+    glBindTexture(GL_TEXTURE_2D, m_texture[2]);
+    // 设置纹理缩放时的策略
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // 设置st方向上纹理超出坐标时的显示策略
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, m_frameSize.width() / 2, m_frameSize.height() / 2, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, nullptr);
+
+    m_textureInited = true;
+}
+
+void QYUVOpenGLWidget::deInitTextures()
+{
+    if (QOpenGLFunctions::isInitialized(QOpenGLFunctions::d_ptr)) {
+        glDeleteTextures(3, m_texture);
+    }
+
+    memset(m_texture, 0, sizeof(m_texture));
+    m_textureInited = false;
+}
+
+void QYUVOpenGLWidget::updateTexture(GLuint texture, quint32 textureType, quint8 *pixels, quint32 stride)
+{
+    if (!pixels)
         return;
-    }
 
-    int drawIndex = m_pboIndex;
-    int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
-    int heights[3] = {m_frameSize.height(), m_frameSize.height() / 2, m_frameSize.height() / 2};
+    QSize size = 0 == textureType ? m_frameSize : m_frameSize / 2;
 
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-    m_program.bind();
-    QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
-
-    for (int i = 0; i < 3; i++) {
-        // Bind and Transfer
-        glBindTextureUnit(i, m_textures[i]);
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
-        glTextureSubImage2D(m_textures[i], 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
-    }
-
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    m_program.release();
+    makeCurrent();
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(stride));
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, size.width(), size.height(), GL_LUMINANCE, GL_UNSIGNED_BYTE, pixels);
+    doneCurrent();
 }
-
-void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
-void QYuvOpenGLWidget::updateTextures(quint8*, quint8*, quint8*, quint32, quint32, quint32) {}

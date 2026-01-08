@@ -1,7 +1,6 @@
 #include <QDir>
 #include <QMessageBox>
 #include <QTimer>
-#include <span>
 
 #include "controller.h"
 #include "devicemsg.h"
@@ -22,11 +21,7 @@ Device::Device(DeviceParams params, QObject *parent) : IDevice(parent), m_params
     }
 
     if (params.display) {
-        m_decoder = new Decoder([this](int width, int height, 
-                                   std::span<const uint8_t> dataY, 
-                                   std::span<const uint8_t> dataU, 
-                                   std::span<const uint8_t> dataV, 
-                                   int linesizeY, int linesizeU, int linesizeV) {
+        m_decoder = new Decoder([this](int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV, int linesizeY, int linesizeU, int linesizeV) {
             for (const auto& item : m_deviceObservers) {
                 item->onFrame(width, height, dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
             }

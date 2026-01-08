@@ -1,17 +1,17 @@
 #include <QDebug>
+
 #include "avframeconvert.h"
 
 AVFrameConvert::AVFrameConvert() {}
 
-AVFrameConvert::~AVFrameConvert() {
-    deInit();
-}
+AVFrameConvert::~AVFrameConvert() {}
 
 void AVFrameConvert::setSrcFrameInfo(int srcWidth, int srcHeight, AVPixelFormat srcFormat)
 {
     m_srcWidth = srcWidth;
     m_srcHeight = srcHeight;
     m_srcFormat = srcFormat;
+    qDebug() << "Convert::src frame info " << srcWidth << "x" << srcHeight;
 }
 
 void AVFrameConvert::getSrcFrameInfo(int &srcWidth, int &srcHeight, AVPixelFormat &srcFormat)
@@ -37,20 +37,11 @@ void AVFrameConvert::getDstFrameInfo(int &dstWidth, int &dstHeight, AVPixelForma
 
 bool AVFrameConvert::init()
 {
-    // Validasi Parameter Dasar
-    if (m_srcWidth <= 0 || m_srcHeight <= 0 || m_srcFormat == AV_PIX_FMT_NONE ||
-        m_dstWidth <= 0 || m_dstHeight <= 0 || m_dstFormat == AV_PIX_FMT_NONE) {
-        return false;
+    if (m_convertCtx) {
+        return true;
     }
-
-    // Inisialisasi Konversi
-    m_convertCtx = sws_getCachedContext(m_convertCtx,
-                                        m_srcWidth, m_srcHeight, m_srcFormat,
-                                        m_dstWidth, m_dstHeight, m_dstFormat,
-                                        SWS_FAST_BILINEAR, NULL, NULL, NULL);
-
+    m_convertCtx = sws_getContext(m_srcWidth, m_srcHeight, m_srcFormat, m_dstWidth, m_dstHeight, m_dstFormat, SWS_BICUBIC, Q_NULLPTR, Q_NULLPTR, Q_NULLPTR);
     if (!m_convertCtx) {
-        qCritical("AVFrameConvert: Failed to initialize/cache sws_context");
         return false;
     }
     return true;
@@ -58,7 +49,7 @@ bool AVFrameConvert::init()
 
 bool AVFrameConvert::isInit()
 {
-    return m_convertCtx != Q_NULLPTR;
+    return m_convertCtx ? true : false;
 }
 
 void AVFrameConvert::deInit()
@@ -74,15 +65,10 @@ bool AVFrameConvert::convert(const AVFrame *srcFrame, AVFrame *dstFrame)
     if (!m_convertCtx || !srcFrame || !dstFrame) {
         return false;
     }
-    
-    int ret = sws_scale(m_convertCtx,
-                        srcFrame->data, srcFrame->linesize, 0, m_srcHeight,
-                        dstFrame->data, dstFrame->linesize);
-
-    if (ret != m_dstHeight) {
-        qWarning("AVFrameConvert: sws_scale failed or incomplete. Ret: %d, Expected: %d", ret, m_dstHeight);
+    qint32 ret
+        = sws_scale(m_convertCtx, static_cast<const uint8_t *const *>(srcFrame->data), srcFrame->linesize, 0, m_srcHeight, dstFrame->data, dstFrame->linesize);
+    if (0 == ret) {
         return false;
     }
-
     return true;
 }

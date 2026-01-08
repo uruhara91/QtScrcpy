@@ -1,10 +1,9 @@
 #include "videobuffer.h"
 #include "avframeconvert.h"
-#include <QDebug>
-
 extern "C"
 {
-#include "libavutil/frame.h"
+#include "libavformat/avformat.h"
+#include "libavutil/avutil.h"
 #include "libavutil/imgutils.h"
 }
 
@@ -12,13 +11,10 @@ VideoBuffer::VideoBuffer(QObject *parent) : QObject(parent) {
     connect(&m_fpsCounter, &FpsCounter::updateFPS, this, &VideoBuffer::updateFPS);
 }
 
-VideoBuffer::~VideoBuffer() {
-    deInit();
-}
+VideoBuffer::~VideoBuffer() {}
 
 bool VideoBuffer::init()
 {
-    // Alokasi Frame
     m_decodingFrame = av_frame_alloc();
     if (!m_decodingFrame) {
         goto error;
@@ -29,7 +25,10 @@ bool VideoBuffer::init()
         goto error;
     }
 
+    // there is initially no rendering frame, so consider it has already been
+    // consumed
     m_renderingFrameConsumed = true;
+
     m_fpsCounter.start();
     return true;
 
@@ -42,11 +41,11 @@ void VideoBuffer::deInit()
 {
     if (m_decodingFrame) {
         av_frame_free(&m_decodingFrame);
-        m_decodingFrame = nullptr;
+        m_decodingFrame = Q_NULLPTR;
     }
     if (m_renderingframe) {
         av_frame_free(&m_renderingframe);
-        m_renderingframe = nullptr;
+        m_renderingframe = Q_NULLPTR;
     }
     m_fpsCounter.stop();
 }
@@ -73,48 +72,39 @@ AVFrame *VideoBuffer::decodingFrame()
 
 void VideoBuffer::offerDecodedFrame(bool &previousFrameSkipped)
 {
-    QMutexLocker lock(&m_mutex);
-    
-    if (!m_renderingFrameConsumed) {
-        previousFrameSkipped = true;
-        if (m_fpsCounter.isStarted()) {
+    m_mutex.lock();
+
+    if (m_renderExpiredFrames) {
+        // if m_renderExpiredFrames is enable, then the decoder must wait for the current
+        // frame to be consumed
+        while (!m_renderingFrameConsumed && !m_interrupted) {
+            m_renderingFrameConsumedCond.wait(&m_mutex);
+        }
+    } else {
+        if (m_fpsCounter.isStarted() && !m_renderingFrameConsumed) {
             m_fpsCounter.addSkippedFrame();
         }
-        av_frame_unref(m_renderingframe);
-    } else {
-        previousFrameSkipped = false;
     }
 
     swap();
+    previousFrameSkipped = !m_renderingFrameConsumed;
     m_renderingFrameConsumed = false;
+    m_mutex.unlock();
 }
 
 const AVFrame *VideoBuffer::consumeRenderedFrame()
 {
+    Q_ASSERT(!m_renderingFrameConsumed);
     m_renderingFrameConsumed = true;
-    
     if (m_fpsCounter.isStarted()) {
         m_fpsCounter.addRenderedFrame();
     }
-    
     if (m_renderExpiredFrames) {
+        // if m_renderExpiredFrames is enable, then notify the decoder the current frame is
+        // consumed, so that it may push a new one
         m_renderingFrameConsumedCond.wakeOne();
     }
     return m_renderingframe;
-}
-
-void VideoBuffer::peekFrameInfo(int &width, int &height, int &format)
-{
-    QMutexLocker lock(&m_mutex);
-    if (m_renderingframe) {
-        width = m_renderingframe->width;
-        height = m_renderingframe->height;
-        format = m_renderingframe->format;
-    } else {
-        width = 0;
-        height = 0;
-        format = -1;
-    }
 }
 
 void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame)
@@ -124,52 +114,54 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
     }
 
     lock();
-    AVFrame* frame = m_renderingframe;
-
-    if (!frame || frame->width <= 0 || frame->height <= 0) {
-        unLock();
-        return; 
-    }
-
+    auto frame = m_renderingframe;
     int width = frame->width;
     int height = frame->height;
+    int linesize = frame->linesize[0];
 
+    // create buffer
+    uint8_t* rgbBuffer = new uint8_t[linesize * height * 4];
     AVFrame *rgbFrame = av_frame_alloc();
     if (!rgbFrame) {
-        unLock();
+        delete [] rgbBuffer;
         return;
     }
 
-    int size = av_image_get_buffer_size(AV_PIX_FMT_RGB32, width, height, 4);
-    uint8_t* rgbBuffer = new uint8_t[size];
-
+    // bind buffer to AVFrame
     av_image_fill_arrays(rgbFrame->data, rgbFrame->linesize, rgbBuffer, AV_PIX_FMT_RGB32, width, height, 4);
 
+    // convert
     AVFrameConvert convert;
-    convert.setSrcFrameInfo(width, height, (AVPixelFormat)frame->format);
+    convert.setSrcFrameInfo(width, height, AV_PIX_FMT_YUV420P);
     convert.setDstFrameInfo(width, height, AV_PIX_FMT_RGB32);
-    
-    if (convert.init() && convert.convert(frame, rgbFrame)) {
-        convert.deInit();
+    bool ret = false;
+    ret = convert.init();
+    if (!ret) {
+        delete [] rgbBuffer;
         av_free(rgbFrame);
-        unLock();
-        
-        onFrame(width, height, rgbBuffer);
-    } else {
-        // Gagal
-        convert.deInit();
-        av_free(rgbFrame);
-        unLock();
+        return;
     }
+    ret = convert.convert(frame, rgbFrame);
+    if (!ret) {
+        delete [] rgbBuffer;
+        av_free(rgbFrame);
+        return;
+    }
+    convert.deInit();
+    av_free(rgbFrame);
+    unLock();
 
+    onFrame(width, height, rgbBuffer);
     delete [] rgbBuffer;
 }
 
 void VideoBuffer::interrupt()
 {
     if (m_renderExpiredFrames) {
-        QMutexLocker lock(&m_mutex);
+        m_mutex.lock();
         m_interrupted = true;
+        m_mutex.unlock();
+        // wake up blocking wait
         m_renderingFrameConsumedCond.wakeOne();
     }
 }

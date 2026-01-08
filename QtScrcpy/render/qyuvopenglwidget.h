@@ -1,38 +1,25 @@
 #ifndef QYUVOPENGLWIDGET_H
 #define QYUVOPENGLWIDGET_H
-
-#include <QOpenGLWidget>
-#include <QOpenGLFunctions_4_5_Core>
 #include <QOpenGLBuffer>
+#include <QOpenGLFunctions>
 #include <QOpenGLShaderProgram>
-#include <QOpenGLVertexArrayObject>
-#include <span>
-#include <atomic>
+#include <QOpenGLWidget>
 
-class VideoBuffer;
-struct AVFrame;
-
-class QYuvOpenGLWidget : public QOpenGLWidget, protected QOpenGLFunctions_4_5_Core
+class QYUVOpenGLWidget
+    : public QOpenGLWidget
+    , protected QOpenGLFunctions
 {
     Q_OBJECT
 public:
-    explicit QYuvOpenGLWidget(QWidget *parent = nullptr);
-    virtual ~QYuvOpenGLWidget() override;
+    explicit QYUVOpenGLWidget(QWidget *parent = nullptr);
+    virtual ~QYUVOpenGLWidget() override;
 
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
 
-    void setFrameData(int width, int height, 
-                      std::span<const uint8_t> dataY, 
-                      std::span<const uint8_t> dataU, 
-                      std::span<const uint8_t> dataV, 
-                      int linesizeY, int linesizeU, int linesizeV);
+    void setFrameSize(const QSize &frameSize);
     const QSize &frameSize();
-    void setVideoBuffer(VideoBuffer *vb);
     void updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV);
-
-signals:
-    void requestUpdateTextures(int width, int height);
 
 protected:
     void initializeGL() override;
@@ -41,34 +28,24 @@ protected:
 
 private:
     void initShader();
-    void initTextures(int width, int height);
+    void initTextures();
     void deInitTextures();
-    
-    void initPBOs(int width, int height);
-    void deInitPBOs();
-    
-    void renderFrame(const AVFrame *frame);
-    
-    void setFrameSize(const QSize &frameSize);
+    void updateTexture(GLuint texture, quint32 textureType, quint8 *pixels, quint32 stride);
 
 private:
+    // 视频帧尺寸
     QSize m_frameSize = { -1, -1 };
-    VideoBuffer *m_vb = nullptr;
-    
+    bool m_needUpdate = false;
+    bool m_textureInited = false;
+
+    // 顶点缓冲对象(Vertex Buffer Objects, VBO)：默认即为VertexBuffer(GL_ARRAY_BUFFER)类型
     QOpenGLBuffer m_vbo;
-    QOpenGLVertexArrayObject m_vao;
-    QOpenGLShaderProgram m_program;
 
-    GLuint m_textures[3] = {0, 0, 0}; 
+    // 着色器程序：编译链接着色器
+    QOpenGLShaderProgram m_shaderProgram;
 
-    GLuint m_pbos[2][3] = {{0,0,0}, {0,0,0}};
-    void* m_pboMappedPtrs[2][3] = {{nullptr, nullptr, nullptr}, {nullptr, nullptr, nullptr}};
-    
-    bool m_pboSizeValid = false;
-    bool m_isInitialized = false;
-
-    std::atomic<int> m_pboIndex = 0;
-    std::atomic<bool> m_textureSizeMismatch = false;
+    // YUV纹理，用于生成纹理贴图
+    GLuint m_texture[3] = { 0 };
 };
 
 #endif // QYUVOPENGLWIDGET_H
