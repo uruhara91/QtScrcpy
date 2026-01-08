@@ -268,11 +268,11 @@ void myMessageOutput(QtMsgType type, const QMessageLogContext &context, const QS
     // Is Qt log level higher than warning?
     float fLogLevel = g_msgType;
     if (QtInfoMsg == g_msgType) {
-        fLogLevel = QtDebugMsg + 0.5f;
+        fLogLevel = static_cast<int>(QtDebugMsg) + 0.5f;
     }
     float fLogLevel2 = type;
     if (QtInfoMsg == type) {
-        fLogLevel2 = QtDebugMsg + 0.5f;
+        fLogLevel2 = static_cast<int>(QtDebugMsg) + 0.5f;
     }
 
     if (fLogLevel <= fLogLevel2) {
