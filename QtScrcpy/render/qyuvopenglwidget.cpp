@@ -8,6 +8,10 @@ extern "C" {
 #include <libavutil/imgutils.h>
 }
 
+static inline int align32(int width) {
+    return (width + 31) & ~31;
+}
+
 static const char *vertShader = R"(#version 450 core
 layout(location = 0) in vec3 vertexIn;
 layout(location = 1) in vec2 textureIn;
@@ -116,7 +120,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
         if (!m_pboMappedPtrs[uploadIndex][i]) continue;
         uint8_t* dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
         if (srcData[i]) {
-            av_image_copy_plane(dstPtr, widths[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
+            av_image_copy_plane(dstPtr, m_pboStrides[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
         }
     }
 
@@ -210,17 +214,19 @@ void QYuvOpenGLWidget::initTextures(int width, int height) {
 
 void QYuvOpenGLWidget::initPBOs(int width, int height) {
     deInitPBOs();
-    
-    // Tightly packed sizes
+
+    m_pboStrides[0] = align32(width);
+    m_pboStrides[1] = align32(width / 2);
+    m_pboStrides[2] = align32(width / 2);
+
     int sizes[3] = {
-        width * height,             // Y
-        (width / 2) * (height / 2), // U
-        (width / 2) * (height / 2)  // V
+        m_pboStrides[0] * height,           
+        m_pboStrides[1] * (height / 2),
+        m_pboStrides[2] * (height / 2)
     };
 
     glCreateBuffers(6, &m_pbos[0][0]); 
 
-    // Persistent mapping
     GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
 
     for (int set = 0; set < 2; set++) {
@@ -275,10 +281,11 @@ void QYuvOpenGLWidget::paintGL() {
     QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
 
     for (int i = 0; i < 3; i++) {
-        // Bind and Transfer
         glBindTextureUnit(i, m_textures[i]);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, m_pboStrides[i]);
         glTextureSubImage2D(m_textures[i], 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     }
 
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
