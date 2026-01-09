@@ -127,7 +127,10 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     // 3. Commit Index & Update
     m_pboIndex = uploadIndex;
 
-    QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
+    bool expected = false;
+    if (m_updatePending.compare_exchange_strong(expected, true)) {
+        QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
+    }
 }
 
 void QYuvOpenGLWidget::initializeGL() {
@@ -272,6 +275,7 @@ void QYuvOpenGLWidget::paintGL() {
     }
 
     int drawIndex = m_pboIndex;
+
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
     int heights[3] = {m_frameSize.height(), m_frameSize.height() / 2, m_frameSize.height() / 2};
 
@@ -289,9 +293,10 @@ void QYuvOpenGLWidget::paintGL() {
     }
 
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
     m_program.release();
+    m_updatePending = false;
 }
 
 void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }

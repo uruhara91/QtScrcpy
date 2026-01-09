@@ -71,6 +71,8 @@ private:
     std::atomic<bool> m_textureSizeMismatch = false;
 
     int m_pboStrides[3] = {0, 0, 0};
+
+    std::atomic<bool> m_updatePending = false;
 };
 
 #endif // QYUVOPENGLWIDGET_H
