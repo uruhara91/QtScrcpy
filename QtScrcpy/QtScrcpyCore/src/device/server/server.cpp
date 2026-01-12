@@ -114,7 +114,7 @@ bool Server::execute()
         m_serverProcess.kill();
     }
     QStringList args;
-    args << "shell";
+    // args << "shell";
     args << QString("CLASSPATH=%1").arg(m_params.serverRemotePath);
     args << "app_process";
 
@@ -218,7 +218,16 @@ bool Server::execute()
     // adb -s P7C0218510000537 shell CLASSPATH=/data/local/tmp/scrcpy-server app_process / com.genymobile.scrcpy.Server 0 8000000 false
     // mark: crop input format: "width:height:x:y" or "" for no crop, for example: "100:200:0:0"
     // 这条adb命令是阻塞运行的，m_serverProcess进程不会退出了
-    m_serverProcess.execute(m_params.serial, args);
+    QString cmdObj = args.join(" ");
+
+    QString hybridCmd = QString("su -c '%1' || %1").arg(cmdObj);
+
+    QStringList finalArgs;
+    finalArgs << "shell";
+    finalArgs << hybridCmd;
+
+    m_serverProcess.execute(m_params.serial, finalArgs);
+    
     return true;
 }
 
