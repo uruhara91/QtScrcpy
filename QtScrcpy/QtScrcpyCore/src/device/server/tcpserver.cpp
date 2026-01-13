@@ -1,5 +1,6 @@
 #include "tcpserver.h"
 #include "videosocket.h"
+#include <QTcpSocket>
 
 TcpServer::TcpServer(QObject *parent) : QTcpServer(parent) {}
 
