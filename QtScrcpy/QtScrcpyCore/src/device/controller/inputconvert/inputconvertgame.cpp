@@ -19,7 +19,7 @@ InputConvertGame::~InputConvertGame() {}
 
 void InputConvertGame::mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize)
 {
-    // 处理开关按键
+    // Handle switch key
     if (m_keyMap.isSwitchOnKeyboard() == false && m_keyMap.getSwitchKey() == static_cast<int>(from->button())) {
         if (from->type() != QEvent::MouseButtonPress) {
             return;
@@ -57,7 +57,7 @@ void InputConvertGame::wheelEvent(const QWheelEvent *from, const QSize &frameSiz
 
 void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize)
 {
-    // 处理开关按键
+    // Handle switch key
     if (m_keyMap.isSwitchOnKeyboard() && m_keyMap.getSwitchKey() == from->key()) {
         if (QEvent::KeyPress != from->type()) {
             return;
@@ -69,7 +69,7 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
     }
 
     const KeyMap::KeyMapNode &node = m_keyMap.getKeyMapNodeKey(from->key());
-    // 处理特殊按键：可以释放出鼠标的按键
+    // Handle special keys: keys that can release the mouse
     if (m_needBackMouseMove && KeyMap::KMT_CLICK == node.type && node.data.click.switchMap) {
         updateSize(frameSize, showSize);
         // Qt::Key_Tab Qt::Key_M for PUBG mobile
@@ -105,11 +105,11 @@ void InputConvertGame::keyEvent(const QKeyEvent *from, const QSize &frameSize, c
         }
 
         switch (node.type) {
-        // 处理方向盘
+        // Handle steer wheel
         case KeyMap::KMT_STEER_WHEEL:
             processSteerWheel(node, from);
             return;
-        // 处理普通按键
+        // Handle normal click
         case KeyMap::KMT_CLICK:
             processKeyClick(node.data.click.keyNode.pos, false, node.data.click.switchMap, from);
             processAndroidKey(node.data.click.keyNode.androidKey, from);
@@ -499,8 +499,6 @@ void InputConvertGame::processKeyDrag(const QPointF &startPos, QPointF endPos, q
         const float speed = qBound(0.0f, static_cast<float>(dragSpeed), 1.0f);
         
         // Calculate delays based on dragSpeed
-        // dragSpeed = 1 -> minDelay = 1, maxDelay = 2 (fastest)
-        // dragSpeed = 0 -> minDelay = 30, maxDelay = 40 (slowest)
         const quint32 minDelay = static_cast<quint32>(1 + (1.0f - speed) * 29);  // 1 to 30
         const quint32 maxDelay = minDelay + static_cast<quint32>((1.0f - speed) * 9) + 1;  // // min + (0 to 9) + 1
 
@@ -565,6 +563,9 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
         return false;
     }
 
+    // [WAYLAND FIX]: Di Wayland, kita TIDAK BOLEH memanipulasi posisi kursor secara manual (warping).
+    // checkCursorPos akan memicu QCursor::setPos yang menyebabkan crash (infinite loop event).
+    // Jadi di Wayland, kita skip logika reset cursor, dan bergantung pada Pointer Lock dari Qt::BlankCursor.
     if (checkCursorPos(from)) {
         m_ctrlMouseMove.lastPos = QPointF(0.0, 0.0);
         return true;
@@ -576,6 +577,11 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
 #else
     m_ctrlMouseMove.lastPos = from->position();
 #endif
+
+    // [WAYLAND FIX]: Jika lastPos belum terinisialisasi (misal di awal frame Wayland), jangan hitung delta.
+    if (lastPos.isNull()) {
+        return true;
+    }
 
     if (m_ctrlMouseMove.ignoreCount > 0) {
         --m_ctrlMouseMove.ignoreCount;
@@ -622,6 +628,13 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
 
 bool InputConvertGame::checkCursorPos(const QMouseEvent *from)
 {
+    // [WAYLAND FIX]: Deteksi Wayland dan matikan manual cursor warping.
+    // Memaksa setPos di Wayland bisa menyebabkan segfault di flushWindowSystemEvents.
+    static bool isWayland = QGuiApplication::platformName().startsWith(QLatin1String("wayland"));
+    if (isWayland) {
+        return false;
+    }
+
     bool moveCursor = false;
     QPoint pos = from->pos();
     if (pos.x() < CURSOR_POS_CHECK) {
@@ -647,6 +660,11 @@ bool InputConvertGame::checkCursorPos(const QMouseEvent *from)
 
 void InputConvertGame::moveCursorTo(const QMouseEvent *from, const QPoint &localPosPixel)
 {
+    // Safety check
+    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"))) {
+        return;
+    }
+
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     QPoint posOffset = from->pos() - localPosPixel;
     QPoint globalPos = from->globalPos();
@@ -721,6 +739,7 @@ void InputConvertGame::hideMouseCursor(bool hide)
 {
     if (hide) {
 #ifdef QT_NO_DEBUG
+        // [WAYLAND NOTE] BlankCursor memicu Pointer Lock pada compositor modern (KDE/Gnome/Hyprland)
         QGuiApplication::setOverrideCursor(QCursor(Qt::BlankCursor));
 #else
         QGuiApplication::setOverrideCursor(QCursor(Qt::CrossCursor));
