@@ -8,8 +8,8 @@ extern "C" {
 #include <libavutil/imgutils.h>
 }
 
-// Consteval forces compile-time evaluation where possible
-consteval int align32(int width) {
+// Constexpr forces compile-time evaluation where possible
+constexpr int align32(int width) {
     return (width + 31) & ~31;
 }
 
@@ -302,4 +302,3 @@ void QYuvOpenGLWidget::paintGL() {
 
 void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
 void QYuvOpenGLWidget::updateTextures(quint8*, quint8*, quint8*, quint32, quint32, quint32) {}
-}
