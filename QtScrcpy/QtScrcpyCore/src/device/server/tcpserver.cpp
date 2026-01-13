@@ -1,3 +1,10 @@
+#include "tcpserver.h"
+#include "videosocket.h"
+
+TcpServer::TcpServer(QObject *parent) : QTcpServer(parent) {}
+
+TcpServer::~TcpServer() {}
+
 void TcpServer::incomingConnection(qintptr handle)
 {
     if (m_isVideoSocket) {
