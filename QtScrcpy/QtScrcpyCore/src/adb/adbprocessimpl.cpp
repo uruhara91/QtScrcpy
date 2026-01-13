@@ -97,15 +97,17 @@ void AdbProcessImpl::initSignals()
 
 void AdbProcessImpl::execute(const QString &serial, const QStringList &args)
 {
-    m_standardOutput = "";
-    m_errorOutput = "";
     QStringList adbArgs;
+    adbArgs.reserve(args.size() + 2);
+    
     if (!serial.isEmpty()) {
-        adbArgs << "-s" << serial;
+        adbArgs << QStringLiteral("-s") << serial;
     }
-    adbArgs << args;
-    qDebug() << getAdbPath() << adbArgs.join(" ");
-    start(getAdbPath(), adbArgs);
+    adbArgs.append(args);
+
+    if (s_adbPath.isEmpty()) getAdbPath();
+    
+    start(s_adbPath, adbArgs);
 }
 
 bool AdbProcessImpl::isRuning()
@@ -207,38 +209,38 @@ QString AdbProcessImpl::getErrorOut()
 
 void AdbProcessImpl::forward(const QString &serial, quint16 localPort, const QString &deviceSocketName)
 {
-    QStringList adbArgs;
-    adbArgs << "forward";
-    adbArgs << QString("tcp:%1").arg(localPort);
-    adbArgs << QString("localabstract:%1").arg(deviceSocketName);
-    execute(serial, adbArgs);
+    execute(serial, {
+        QStringLiteral("forward"),
+        QStringLiteral("tcp:%1").arg(localPort),
+        QStringLiteral("localabstract:%1").arg(deviceSocketName)
+    });
 }
 
 void AdbProcessImpl::forwardRemove(const QString &serial, quint16 localPort)
 {
-    QStringList adbArgs;
-    adbArgs << "forward";
-    adbArgs << "--remove";
-    adbArgs << QString("tcp:%1").arg(localPort);
-    execute(serial, adbArgs);
+    execute(serial, {
+        QStringLiteral("forward"),
+        QStringLiteral("--remove"),
+        QStringLiteral("tcp:%1").arg(localPort)
+    });
 }
 
 void AdbProcessImpl::reverse(const QString &serial, const QString &deviceSocketName, quint16 localPort)
 {
-    QStringList adbArgs;
-    adbArgs << "reverse";
-    adbArgs << QString("localabstract:%1").arg(deviceSocketName);
-    adbArgs << QString("tcp:%1").arg(localPort);
-    execute(serial, adbArgs);
+    execute(serial, {
+        QStringLiteral("reverse"),
+        QStringLiteral("localabstract:%1").arg(deviceSocketName),
+        QStringLiteral("tcp:%1").arg(localPort)
+    });
 }
 
 void AdbProcessImpl::reverseRemove(const QString &serial, const QString &deviceSocketName)
 {
-    QStringList adbArgs;
-    adbArgs << "reverse";
-    adbArgs << "--remove";
-    adbArgs << QString("localabstract:%1").arg(deviceSocketName);
-    execute(serial, adbArgs);
+    execute(serial, {
+        QStringLiteral("reverse"),
+        QStringLiteral("--remove"),
+        QStringLiteral("localabstract:%1").arg(deviceSocketName)
+    });
 }
 
 void AdbProcessImpl::push(const QString &serial, const QString &local, const QString &remote)
