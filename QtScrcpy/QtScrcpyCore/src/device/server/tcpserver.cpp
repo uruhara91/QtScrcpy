@@ -1,24 +1,27 @@
-#include "tcpserver.h"
-#include "videosocket.h"
-
-TcpServer::TcpServer(QObject *parent) : QTcpServer(parent) {}
-
-TcpServer::~TcpServer() {}
-
 void TcpServer::incomingConnection(qintptr handle)
 {
     if (m_isVideoSocket) {
         VideoSocket *socket = new VideoSocket();
-        socket->setSocketDescriptor(handle);
-        addPendingConnection(socket);
 
-        // next is control socket
+        if (socket->setSocketDescriptor(handle)) {
+            socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
+            socket->setSocketOption(QAbstractSocket::KeepAliveOption, 1); 
+            socket->setReadBufferSize(2 * 1024 * 1024);
+            
+            addPendingConnection(socket);
+        } else {
+            delete socket;
+        }
+
         m_isVideoSocket = false;
     } else {
         QTcpSocket *socket = new QTcpSocket();
-        socket->setSocketDescriptor(handle);
-        socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
-        socket->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
-        addPendingConnection(socket);
+        if (socket->setSocketDescriptor(handle)) {
+            socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
+            socket->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
+            addPendingConnection(socket);
+        } else {
+            delete socket;
+        }
     }
 }
