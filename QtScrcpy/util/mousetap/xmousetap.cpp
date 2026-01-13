@@ -1,4 +1,6 @@
 #include <QtGlobal>
+#include <QDebug>
+#include <QGuiApplication>
 
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
 #include <QtX11Extras/QX11Info>
@@ -23,42 +25,63 @@ void XMouseTap::quitMouseEventTap() {}
 static void find_grab_window_recursive(xcb_connection_t *dpy, xcb_window_t window,
         QRect rc, int16_t offset_x, int16_t offset_y,
         xcb_window_t *grab_window, uint32_t *grab_window_size) {
+    
+    // Safety check pointer
+    if (!dpy) return;
+
     xcb_query_tree_cookie_t tree_cookie;
     xcb_query_tree_reply_t *tree;
     tree_cookie = xcb_query_tree(dpy, window);
     tree = xcb_query_tree_reply(dpy, tree_cookie, NULL);
 
+    if (!tree) return;
+
     xcb_window_t *children = xcb_query_tree_children(tree);
-    for (int i = 0; i < xcb_query_tree_children_length(tree); i++) {
+    int children_len = xcb_query_tree_children_length(tree);
+    
+    for (int i = 0; i < children_len; i++) {
         xcb_get_geometry_cookie_t gg_cookie;
         xcb_get_geometry_reply_t *gg;
         gg_cookie = xcb_get_geometry(dpy, children[i]);
         gg = xcb_get_geometry_reply(dpy, gg_cookie, NULL);
 
-        if (gg->x + offset_x <= rc.left() && gg->x + offset_x + gg->width >= rc.right() &&
-                gg->y + offset_y <= rc.top() && gg->y + offset_y + gg->height >= rc.bottom()) {
-            if (!*grab_window || gg->width * gg->height <= *grab_window_size) {
-                *grab_window = children[i];
-                *grab_window_size = gg->width * gg->height;
+        if (gg) {
+            if (gg->x + offset_x <= rc.left() && gg->x + offset_x + gg->width >= rc.right() &&
+                    gg->y + offset_y <= rc.top() && gg->y + offset_y + gg->height >= rc.bottom()) {
+                if (!*grab_window || gg->width * gg->height <= *grab_window_size) {
+                    *grab_window = children[i];
+                    *grab_window_size = gg->width * gg->height;
+                }
             }
+
+            find_grab_window_recursive(dpy, children[i], rc,
+                    gg->x + offset_x, gg->y + offset_y,
+                    grab_window, grab_window_size);
+
+            free(gg);
         }
-
-        find_grab_window_recursive(dpy, children[i], rc,
-                gg->x + offset_x, gg->y + offset_y,
-                grab_window, grab_window_size);
-
-        free(gg);
     }
 
     free(tree);
 }
 
 void XMouseTap::enableMouseEventTap(QRect rc, bool enabled) {
+    // [WAYLAND FIX]: Langsung return jika di Wayland.
+    // Memaksa menggunakan XCB di Wayland akan menyebabkan segfault karena
+    // koneksi X11 mungkin tidak ada atau operasi grab pointer dilarang.
+    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"))) {
+        return;
+    }
+
     if (enabled && rc.isEmpty()) {
         return;
     }
 
+    // [SAFETY]: Pastikan koneksi X11 valid sebelum digunakan
     xcb_connection_t *dpy = QX11Info::connection();
+    if (!dpy) {
+        return;
+    }
 
     if (enabled) {
         // We grab the top-most smallest window
@@ -75,16 +98,21 @@ void XMouseTap::enableMouseEventTap(QRect rc, bool enabled) {
                     grab_window, /* event_mask = */ 0,
                     XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC,
                     grab_window, XCB_NONE, XCB_CURRENT_TIME);
+            
+            // Periksa reply sebelum free
             grab = xcb_grab_pointer_reply(dpy, grab_cookie, NULL);
-
-            free(grab);
+            if (grab) {
+                free(grab);
+            }
         }
     } else {
         xcb_void_cookie_t ungrab_cookie;
         xcb_generic_error_t *error;
         ungrab_cookie = xcb_ungrab_pointer_checked(dpy, XCB_CURRENT_TIME);
         error = xcb_request_check(dpy, ungrab_cookie);
-
-        free(error);
+        
+        if (error) {
+            free(error);
+        }
     }
 }
