@@ -149,10 +149,10 @@ void InputConvertGame::updateSize(const QSize &frameSize, const QSize &showSize)
 {
     if (showSize != m_showSize) {
         if (m_gameMap && m_keyMap.isValidMouseMoveMap()) {
-#ifdef QT_NO_DEBUG
-            // show size change, resize grab cursor
+            // [WAYLAND FIX] Hapus #ifdef QT_NO_DEBUG
+            // Kita HARUS melakukan grabCursor agar mouse terkunci di dalam window
+            // terutama di Wayland agar tidak keluar border.
             emit grabCursor(true);
-#endif
         }
     }
     m_frameSize = frameSize;
@@ -721,10 +721,12 @@ bool InputConvertGame::switchGameMap()
     if (!m_keyMap.isValidMouseMoveMap()) {
         return m_gameMap;
     }
-#ifdef QT_NO_DEBUG
-    // grab cursor and set cursor only mouse move map
+    
+    // [WAYLAND FIX] Hapus #ifdef QT_NO_DEBUG
+    // Kita HARUS melakukan grabCursor, tidak peduli Debug atau Release.
+    // Jika tidak di-emit, widget tidak akan memanggil grabMouse(), dan kursor akan lepas.
     emit grabCursor(m_gameMap);
-#endif
+
     hideMouseCursor(m_gameMap);
 
     if (!m_gameMap) {
@@ -738,12 +740,10 @@ bool InputConvertGame::switchGameMap()
 void InputConvertGame::hideMouseCursor(bool hide)
 {
     if (hide) {
-#ifdef QT_NO_DEBUG
-        // [WAYLAND NOTE] BlankCursor memicu Pointer Lock pada compositor modern (KDE/Gnome/Hyprland)
+        // [WAYLAND FIX] Selalu gunakan BlankCursor.
+        // Jangan gunakan CrossCursor di mode apapun karena Wayland butuh BlankCursor
+        // untuk mengaktifkan "Pointer Lock" / "Relative Pointer" yang benar.
         QGuiApplication::setOverrideCursor(QCursor(Qt::BlankCursor));
-#else
-        QGuiApplication::setOverrideCursor(QCursor(Qt::CrossCursor));
-#endif
     } else {
         QGuiApplication::restoreOverrideCursor();
     }
