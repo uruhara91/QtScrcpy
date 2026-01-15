@@ -15,10 +15,10 @@ ControlMsg::ControlMsg(ControlMsgType controlMsgType) : QScrcpyEvent(Control)
 ControlMsg::~ControlMsg()
 {
     if (CMT_SET_CLIPBOARD == m_data.type && Q_NULLPTR != m_data.setClipboard.text) {
-        delete m_data.setClipboard.text;
+        delete[] m_data.setClipboard.text;
         m_data.setClipboard.text = Q_NULLPTR;
     } else if (CMT_INJECT_TEXT == m_data.type && Q_NULLPTR != m_data.injectText.text) {
-        delete m_data.injectText.text;
+        delete[] m_data.injectText.text;
         m_data.injectText.text = Q_NULLPTR;
     }
 }
@@ -186,7 +186,7 @@ QByteArray ControlMsg::serializeData()
             buffer.write(m_data.setClipboard.text, strlen(m_data.setClipboard.text));
         } else {
             BufferUtil::write32(buffer, 0);
-            buffer.write(m_data.setClipboard.text, 0);
+            // buffer.write(m_data.setClipboard.text, 0);
         }
         break;
     case CMT_SET_DISPLAY_POWER:
