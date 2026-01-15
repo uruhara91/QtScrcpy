@@ -70,6 +70,8 @@ private:
     std::atomic<int> m_pboIndex = 0;
     std::atomic<bool> m_textureSizeMismatch = false;
     std::atomic<bool> m_updatePending = false;
+
+    std::atomic_flag m_pboLock = ATOMIC_FLAG_INIT;
 };
 
 #endif // QYUVOPENGLWIDGET_H

@@ -78,13 +78,17 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
 }
 
 QYuvOpenGLWidget::~QYuvOpenGLWidget() {
-    makeCurrent();
-    deInitTextures();
-    deInitPBOs();
-    if (m_vao) glDeleteVertexArrays(1, &m_vao);
-    if (m_vbo) glDeleteBuffers(1, &m_vbo);
-    doneCurrent();
-}   
+    if (isValid()) {
+        makeCurrent();
+        deInitTextures();
+        deInitPBOs();
+        if (m_vao) glDeleteVertexArrays(1, &m_vao);
+        if (m_vbo) glDeleteBuffers(1, &m_vbo);
+        doneCurrent();
+    } else {
+        qWarning() << "QYuvOpenGLWidget::~QYuvOpenGLWidget: OpenGL context is not valid!";
+    }
+}
 
 QSize QYuvOpenGLWidget::minimumSizeHint() const { return QSize(50, 50); }
 QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize; }
@@ -121,11 +125,21 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     int widths[3] = { width, width / 2, width / 2 };
     int heights[3] = { height, height / 2, height / 2 };
 
+    while (m_pboLock.test_and_set(std::memory_order_acquire)) { 
+    }
+
+    if (!m_pboSizeValid || m_textureSizeMismatch) {
+        m_pboLock.clear(std::memory_order_release);
+        return;
+    }
+
     for (int i = 0; i < 3; i++) {
         if (auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]); dstPtr && srcData[i]) {
              av_image_copy_plane(dstPtr, m_pboStrides[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
         }
     }
+
+    m_pboLock.clear(std::memory_order_release);
 
     // Swap Index atomic
     m_pboIndex = uploadIndex;
@@ -228,6 +242,7 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
 
     for (int set = 0; set < 2; set++) {
         glCreateBuffers(3, m_pbos[set].data());
+
         for (int plane = 0; plane < 3; plane++) {
             glNamedBufferStorage(m_pbos[set][plane], sizes[plane], nullptr, flags);
             m_pboMappedPtrs[set][plane] = glMapNamedBufferRange(m_pbos[set][plane], 0, sizes[plane], flags);
@@ -238,6 +253,7 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
 
 void QYuvOpenGLWidget::deInitTextures() {
     if (!m_isInitialized) return;
+
     if (m_textures[0] != 0) {
         glDeleteTextures(3, m_textures.data());
         std::ranges::fill(m_textures, 0);
@@ -246,6 +262,9 @@ void QYuvOpenGLWidget::deInitTextures() {
 
 void QYuvOpenGLWidget::deInitPBOs() {
     if (!m_isInitialized) return;
+
+    while (m_pboLock.test_and_set(std::memory_order_acquire));
+
     for (int set = 0; set < 2; set++) {
         for (int plane = 0; plane < 3; plane++) {
             if (m_pbos[set][plane] != 0) {
@@ -257,6 +276,8 @@ void QYuvOpenGLWidget::deInitPBOs() {
         }
     }
     m_pboSizeValid = false;
+
+    m_pboLock.clear(std::memory_order_release);
 }
 
 void QYuvOpenGLWidget::resizeGL(int width, int height) {
