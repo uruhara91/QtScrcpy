@@ -685,6 +685,57 @@ void InputConvertGame::stopMouseMoveTimer()
     }
 }
 
+void InputConvertGame::stopSteerWheel() {
+    // 1. Matikan Timer
+    if (m_ctrlSteerWheel.delayData.timer && m_ctrlSteerWheel.delayData.timer->isActive()) {
+        m_ctrlSteerWheel.delayData.timer->stop();
+    }
+    m_ctrlSteerWheel.delayData.queueTimer.clear();
+    m_ctrlSteerWheel.delayData.queuePos.clear();
+
+    // 2. Lepas Touch Analog
+    if (m_ctrlSteerWheel.touchKey != 0) {
+        int id = getTouchID(m_ctrlSteerWheel.touchKey);
+        if (id != -1) {
+            // Kirim event angkat jari di posisi terakhir
+            sendTouchUpEvent(id, m_ctrlSteerWheel.delayData.currentPos);
+            detachTouchID(m_ctrlSteerWheel.touchKey);
+        }
+    }
+
+    // 3. Reset semua flag
+    m_ctrlSteerWheel.touchKey = 0;
+    m_ctrlSteerWheel.pressedUp = false;
+    m_ctrlSteerWheel.pressedDown = false;
+    m_ctrlSteerWheel.pressedLeft = false;
+    m_ctrlSteerWheel.pressedRight = false;
+    m_ctrlSteerWheel.delayData.pressedNum = 0;
+}
+
+void InputConvertGame::stopDrag() {
+    // Bersihkan state drag mouse/skill
+    if (m_dragDelayData.timer) {
+        if (m_dragDelayData.timer->isActive()) {
+            m_dragDelayData.timer->stop();
+        }
+
+        delete m_dragDelayData.timer;
+        m_dragDelayData.timer = nullptr;
+    }
+    m_dragDelayData.queuePos.clear();
+    m_dragDelayData.queueTimer.clear();
+
+    if (m_dragDelayData.pressKey != 0) {
+        int id = getTouchID(m_dragDelayData.pressKey);
+        if (id != -1) {
+            sendTouchUpEvent(id, m_dragDelayData.currentPos);
+            detachTouchID(m_dragDelayData.pressKey);
+        }
+        m_dragDelayData.pressKey = 0;
+        m_dragDelayData.currentPos = QPointF();
+    }
+}
+
 bool InputConvertGame::switchGameMap()
 {
     m_gameMap = !m_gameMap;
@@ -694,14 +745,18 @@ bool InputConvertGame::switchGameMap()
         return m_gameMap;
     }
     
-    // Force grab cursor, always.
     emit grabCursor(m_gameMap);
-
     hideMouseCursor(m_gameMap);
 
     if (!m_gameMap) {
+        
         stopMouseMoveTimer();
         mouseMoveStopTouch();
+
+        stopSteerWheel();
+
+        stopDrag();
+        
     } else {
         m_ctrlMouseMove.lastPos = QPointF(); 
     }

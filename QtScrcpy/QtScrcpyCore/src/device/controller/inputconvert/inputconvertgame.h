@@ -126,6 +126,10 @@ private:
         QQueue<quint32> queueTimer;
         int pressKey = 0;
     } m_dragDelayData;
+
+    void stopSteerWheel();
+    void stopDrag();
+    void releaseAllKeys();
 };
 
 #endif // INPUTCONVERTGAME_H
