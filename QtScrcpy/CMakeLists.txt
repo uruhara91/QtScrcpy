@@ -64,13 +64,19 @@ if (MSVC)
     if(MSVC_VERSION LESS 1800)
         message(FATAL_ERROR "[${PROJECT_NAME}] ERROR: MSVC version is older than 12.0 (2013).")
     endif()
+    
+    # Optimization flags
+    add_compile_options(/O2 /Ob2 /Oi /Ot /Oy /GL /arch:AVX512 /MP)
 
     message(STATUS "[${PROJECT_NAME}] Set Warnings as error")
     # warning level 3 and all warnings as errors
-    add_compile_options(/W3 /WX /wd4566)
+    add_compile_options(/W3 /WX /wd4819 /wd4566)
 
     # avoid warning C4819
     add_compile_options(/utf-8)
+
+    # enable C++ exceptions
+    add_compile_options(/GF /Gy /EHsc)
 
     # ensure we use minimal "windows.h" lib without the crazy min max macros
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -298,6 +304,12 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     get_target_property(QSC_BIN_OUTPUT_PATH ${PROJECT_NAME} RUNTIME_OUTPUT_DIRECTORY)
     set(QSC_DEPLOY_PATH ${QSC_BIN_OUTPUT_PATH})
+
+    # Pastikan mimalloc-static.lib ada di path library
+    target_link_libraries(${PROJECT_NAME} PRIVATE mimalloc-static) 
+
+    # Force include header override
+    target_compile_definitions(${PROJECT_NAME} PRIVATE MIMALLOC_NEW_DELETE)
 
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/sndcpy/soundservice.apk" "${QSC_BIN_OUTPUT_PATH}"

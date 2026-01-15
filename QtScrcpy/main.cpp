@@ -17,6 +17,7 @@
 #include "dialog.h"
 #include "mousetap/mousetap.h"
 #include "adbprocess.h"
+#include <mimalloc-new-delete.h>
 
 static Dialog *g_mainDlg = Q_NULLPTR;
 static QtMessageHandler g_oldMessageHandler = Q_NULLPTR;
