@@ -73,7 +73,7 @@ int main(int argc, char *argv[])
     QSurfaceFormat varFormat = QSurfaceFormat::defaultFormat();
     varFormat.setDepthBufferSize(0);
     varFormat.setStencilBufferSize(0);
-    varFormat.setVersion(4, 6); 
+    varFormat.setVersion(4, 5); 
     varFormat.setProfile(QSurfaceFormat::CoreProfile);
     varFormat.setSwapInterval(0); 
     
@@ -103,7 +103,6 @@ int main(int argc, char *argv[])
     // Debug Info
     qDebug() << "App Name:" << a.applicationName();
     qDebug() << "App Version:" << a.applicationVersion();
-    qDebug() << "OpenGL Context Requested: 3.3 Core Profile";
 
     // Version String Logic
     QStringList versionList = QCoreApplication::applicationVersion().split(".");
@@ -166,12 +165,6 @@ void installTranslator()
 
     QString languagePath = ":/i18n/";
     switch (language) {
-    case QLocale::Chinese:
-        languagePath += "zh_CN.qm";
-        break;
-    case QLocale::Japanese:
-        languagePath += "ja_JP.qm";
-        break;
     case QLocale::English:
     default:
         languagePath += "en_US.qm";
