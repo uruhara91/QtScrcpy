@@ -67,9 +67,8 @@ static void find_grab_window_recursive(xcb_connection_t *dpy, xcb_window_t windo
 
 void XMouseTap::enableMouseEventTap(QRect rc, bool enabled) {
 
-    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"))) {
-        return;
-    }
+    static bool isWayland = QGuiApplication::platformName().startsWith(QLatin1String("wayland"));
+    if (isWayland) return;
 
     if (enabled && rc.isEmpty()) {
         return;
