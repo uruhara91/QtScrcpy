@@ -21,6 +21,7 @@ public:
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
 
+    // Fungsi utama penerima frame dari decoder
     void setFrameData(int width, int height, 
                       std::span<const uint8_t> dataY, 
                       std::span<const uint8_t> dataU, 
@@ -59,6 +60,7 @@ private:
 
     std::array<GLuint, 3> m_textures = {0, 0, 0}; 
     std::array<std::array<GLuint, 3>, 2> m_pbos = {{ {0,0,0}, {0,0,0} }};
+    
     std::array<std::array<void*, 3>, 2> m_pboMappedPtrs = {{ {nullptr}, {nullptr} }};
     std::array<int, 3> m_pboStrides = {0, 0, 0};
     
