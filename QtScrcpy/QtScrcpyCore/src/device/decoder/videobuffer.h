@@ -1,14 +1,14 @@
-#ifndef VIDEO_BUFFER_H
-#define VIDEO_BUFFER_H
+#ifndef VIDEOBUFFER_H
+#define VIDEOBUFFER_H
 
-#include <QMutex>
-#include <QWaitCondition>
 #include <QObject>
+#include <atomic>
+#include <QWaitCondition>
 #include <functional>
+#include <span>
 
 #include "fpscounter.h"
 
-// Forward declarations
 struct AVFrame;
 
 class VideoBuffer : public QObject
@@ -21,40 +21,37 @@ public:
     bool init();
     void deInit();
 
+    // Spinlock API
     void lock();
     void unLock();
-    
-    void setRenderExpiredFrames(bool renderExpiredFrames);
 
     AVFrame *decodingFrame();
     void offerDecodedFrame(bool &previousFrameSkipped);
-
     const AVFrame *consumeRenderedFrame();
 
     void peekFrameInfo(int &width, int &height, int &format);
     void peekRenderedFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame);
 
+    void setRenderExpiredFrames(bool renderExpiredFrames);
     void interrupt();
 
 signals:
-    void updateFPS(quint32 fps);
+    void updateFPS(int fps);
 
 private:
     void swap();
 
 private:
-    // Double Buffer
     AVFrame *m_decodingFrame = nullptr;
     AVFrame *m_renderingframe = nullptr;
-    
-    QMutex m_mutex;
-    bool m_renderingFrameConsumed = true;
-    FpsCounter m_fpsCounter;
+
+    std::atomic_flag m_spinLock = ATOMIC_FLAG_INIT;
 
     bool m_renderExpiredFrames = false;
-    QWaitCondition m_renderingFrameConsumedCond;
-
+    bool m_renderingFrameConsumed = true;
     bool m_interrupted = false;
+
+    FpsCounter m_fpsCounter;
 };
 
-#endif // VIDEO_BUFFER_H
+#endif // VIDEOBUFFER_H
