@@ -561,11 +561,6 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
     if (QEvent::MouseMove != from->type()) {
         return false;
     }
-
-    // [MODIFIED FOR WAYLAND/FPS]
-    // Kita gunakan logika "Center Locked".
-    // 1. Hitung delta dari posisi tengah.
-    // 2. Kembalikan kursor ke posisi tengah segera.
     
     QPoint centerPos(m_showSize.width() / 2, m_showSize.height() / 2);
     
@@ -575,19 +570,13 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
     QPoint currentPos = from->position().toPoint();
 #endif
 
-    // [CRASH FIX] Jika posisi sudah di tengah, berarti ini adalah event hasil warping kita sendiri.
-    // ABAIKAN event ini untuk mencegah infinite loop (Move -> Warp -> Move -> Warp -> Crash).
-    // Toleransi 1-2 pixel mungkin diperlukan jika scaling float tidak presisi, tapi == biasanya cukup.
     if (currentPos == centerPos) {
         m_ctrlMouseMove.lastPos = QPointF(centerPos);
         return true;
     }
 
-    // Jika ini frame pertama (transisi dari mode normal ke game), inisialisasi lastPos ke center
-    // agar tidak ada lonjakan gerakan drastis.
     if (m_ctrlMouseMove.lastPos.isNull()) {
          m_ctrlMouseMove.lastPos = QPointF(centerPos);
-         // Jangan proses gerakan pertama ini, hanya warping setup
          moveCursorTo(from, centerPos);
          return true;
     }
@@ -598,7 +587,7 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
     }
 
     if (m_processMouseMove) {
-        // Hitung jarak dari TENGAH, bukan dari lastPos yang bergerak bebas
+
         QPointF distance_raw = QPointF(currentPos) - QPointF(centerPos);
         
         QPointF speedRatio  {m_keyMap.getMouseMoveMap().data.mouseMove.speedRatio};
@@ -610,7 +599,7 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
         m_ctrlMouseMove.lastConverPos.setX(m_ctrlMouseMove.lastConverPos.x() + distance.x() / m_showSize.width());
         m_ctrlMouseMove.lastConverPos.setY(m_ctrlMouseMove.lastConverPos.y() + distance.y() / m_showSize.height());
 
-        // Boundary check untuk touch event Android (agar tidak kirim touch di luar layar HP)
+        // Boundary check
         if (m_ctrlMouseMove.lastConverPos.x() < 0.05 || m_ctrlMouseMove.lastConverPos.x() > 0.95 || m_ctrlMouseMove.lastConverPos.y() < 0.05
             || m_ctrlMouseMove.lastConverPos.y() > 0.95) {
             if (m_ctrlMouseMove.smallEyes) {
@@ -624,7 +613,7 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
             } else {
                 mouseMoveStopTouch();
                 m_ctrlMouseMove.ignoreCount = 5;
-                // Reset kursor juga saat stop touch
+
                 moveCursorTo(from, centerPos);
                 return true;
             }
@@ -633,11 +622,8 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
         sendTouchMoveEvent(getTouchID(Qt::ExtraButton24), m_ctrlMouseMove.lastConverPos);
     }
     
-    // [CRUCIAL] Selalu reset kursor ke tengah setelah memproses gerakan.
-    // Ini menjaga kursor tetap di dalam window (tidak keluar) dan menghilangkan flicker.
     moveCursorTo(from, centerPos);
-    
-    // Update lastPos untuk referensi (sebenarnya selalu centerPos di logika ini)
+
     m_ctrlMouseMove.lastPos = QPointF(centerPos);
 
     return true;
@@ -645,20 +631,12 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
 
 bool InputConvertGame::checkCursorPos(const QMouseEvent *from)
 {
-    // Logika lama "Edge Warping" dinonaktifkan sepenuhnya.
-    // Kita pindahkan semua logika warping ke processMouseMove (Center Warping).
     Q_UNUSED(from)
     return false;
 }
 
 void InputConvertGame::moveCursorTo(const QMouseEvent *from, const QPoint &localPosPixel)
 {
-    // [WARPING ENABLED]
-    // Kita aktifkan kembali ini. Meskipun di Wayland "Pure" ini dilarang,
-    // kebanyakan setup Gaming di Linux menggunakan XWayland untuk aplikasi Qt/Game
-    // agar fitur warping seperti ini jalan.
-    // Jika benar-benar Native Wayland yang menolak setPos, grabCursor() adalah fallbacknya.
-
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     QPoint posOffset = from->pos() - localPosPixel;
     QPoint globalPos = from->globalPos();
@@ -725,7 +703,6 @@ bool InputConvertGame::switchGameMap()
         stopMouseMoveTimer();
         mouseMoveStopTouch();
     } else {
-        // Saat masuk mode game, reset lastPos agar bersih
         m_ctrlMouseMove.lastPos = QPointF(); 
     }
 
@@ -735,7 +712,6 @@ bool InputConvertGame::switchGameMap()
 void InputConvertGame::hideMouseCursor(bool hide)
 {
     if (hide) {
-        // Selalu BlankCursor untuk gaming
         QGuiApplication::setOverrideCursor(QCursor(Qt::BlankCursor));
     } else {
         QGuiApplication::restoreOverrideCursor();

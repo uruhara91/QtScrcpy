@@ -66,9 +66,7 @@ static void find_grab_window_recursive(xcb_connection_t *dpy, xcb_window_t windo
 }
 
 void XMouseTap::enableMouseEventTap(QRect rc, bool enabled) {
-    // [WAYLAND FIX]: Langsung return jika di Wayland.
-    // Memaksa menggunakan XCB di Wayland akan menyebabkan segfault karena
-    // koneksi X11 mungkin tidak ada atau operasi grab pointer dilarang.
+
     if (QGuiApplication::platformName().startsWith(QLatin1String("wayland"))) {
         return;
     }
@@ -77,7 +75,6 @@ void XMouseTap::enableMouseEventTap(QRect rc, bool enabled) {
         return;
     }
 
-    // [SAFETY]: Pastikan koneksi X11 valid sebelum digunakan
     xcb_connection_t *dpy = QX11Info::connection();
     if (!dpy) {
         return;
