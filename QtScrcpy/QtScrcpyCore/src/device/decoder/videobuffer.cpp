@@ -90,6 +90,9 @@ void VideoBuffer::offerDecodedFrame(bool &previousFrameSkipped)
     }
 
     swap();
+
+    m_frameGen++; 
+    
     m_renderingFrameConsumed = false;
     
     unLock();
@@ -136,40 +139,67 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
 
     int width = frame->width;
     int height = frame->height;
-    
-    AVPixelFormat format = (AVPixelFormat)frame->format; 
+    int format = frame->format;
 
-    AVFrame *rgbFrame = av_frame_alloc();
-    if (!rgbFrame) {
-        unLock();
-        return;
+    bool cacheValid = (m_frameGen == m_cacheGen) &&
+                      (m_cachedFrame != nullptr) &&
+                      (width == m_cachedWidth) &&
+                      (height == m_cachedHeight) &&
+                      (format == m_cachedFormat);
+
+    std::shared_ptr<std::vector<uint8_t>> targetBuffer;
+
+    if (!cacheValid) {
+        
+        if (m_cachedFrame && m_cachedFrame.use_count() == 1) {
+            targetBuffer = m_cachedFrame;
+        } else {
+            // Buffer
+            targetBuffer = std::make_shared<std::vector<uint8_t>>();
+        }
+
+        int size = av_image_get_buffer_size(AV_PIX_FMT_RGB32, width, height, 4);
+        if (targetBuffer->size() != (size_t)size) {
+            targetBuffer->resize(size);
+        }
+
+        // Conversion
+        AVFrame *rgbFrame = av_frame_alloc();
+        if (rgbFrame) {
+            av_image_fill_arrays(rgbFrame->data, rgbFrame->linesize, targetBuffer->data(), AV_PIX_FMT_RGB32, width, height, 4);
+
+            AVFrameConvert convert;
+            convert.setSrcFrameInfo(width, height, (AVPixelFormat)format);
+            convert.setDstFrameInfo(width, height, AV_PIX_FMT_RGB32);
+            
+            if (convert.init()) {
+                convert.convert(frame, rgbFrame);
+                
+                // Update State Cache
+                m_cachedFrame = targetBuffer;
+                m_cacheGen = m_frameGen;
+                m_cachedWidth = width;
+                m_cachedHeight = height;
+                m_cachedFormat = format;
+            } else {
+                 qWarning() << "VideoBuffer::peekRenderedFrame convert init failed";
+                 // Reset target buffer on failure to prevent using garbage data
+                 targetBuffer.reset();
+            }
+            convert.deInit();
+            av_frame_free(&rgbFrame);
+        } else {
+            targetBuffer.reset();
+        }
+    } else {
+        targetBuffer = m_cachedFrame;
     }
-
-    int size = av_image_get_buffer_size(AV_PIX_FMT_RGB32, width, height, 4);
-    uint8_t* rgbBuffer = new uint8_t[size];
-
-    av_image_fill_arrays(rgbFrame->data, rgbFrame->linesize, rgbBuffer, AV_PIX_FMT_RGB32, width, height, 4);
-
-    AVFrameConvert convert;
-    convert.setSrcFrameInfo(width, height, format);
-    convert.setDstFrameInfo(width, height, AV_PIX_FMT_RGB32);
-    
-    bool convertSuccess = false;
-    if (convert.init()) {
-        convertSuccess = convert.convert(frame, rgbFrame);
-    }
-    convert.deInit();
-    av_free(rgbFrame);
 
     unLock();
 
-    if (convertSuccess) {
-        onFrame(width, height, rgbBuffer);
-    } else {
-        qWarning() << "VideoBuffer::peekRenderedFrame failed to convert frame";
+    if (targetBuffer && !targetBuffer->empty()) {
+        onFrame(m_cachedWidth, m_cachedHeight, targetBuffer->data());
     }
-
-    delete [] rgbBuffer;
 }
 
 void VideoBuffer::interrupt()
