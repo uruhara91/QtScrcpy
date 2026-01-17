@@ -4,13 +4,19 @@
 #include <QSurfaceFormat>
 #include <algorithm>
 #include <bit>
+#include <concepts>
 
 extern "C" {
 #include <libavutil/imgutils.h>
 }
 
+template <std::integral T>
+constexpr T alignUp(T value, T alignment) {
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
 constexpr int align64(int width) {
-    return (width + 63) & ~63;
+    return alignUp(width, 64);
 }
 
 // Shader Pass-through
@@ -122,8 +128,12 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
 
     const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
     int srcLinesizes[3] = { linesizeY, linesizeU, linesizeV };
-    int widths[3] = { width, width / 2, width / 2 };
-    int heights[3] = { height, height / 2, height / 2 };
+    
+    int halfWidth = (width + 1) / 2;
+    int halfHeight = (height + 1) / 2;
+    
+    int widths[3] = { width, halfWidth, halfWidth };
+    int heights[3] = { height, halfHeight, halfHeight };
 
     while (m_pboLock.test_and_set(std::memory_order_acquire)) { 
     }
@@ -134,17 +144,22 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     }
 
     for (int i = 0; i < 3; i++) {
-        if (auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]); dstPtr && srcData[i]) {
+        auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
+        if (!dstPtr || !srcData[i]) continue;
+
+        if (srcLinesizes[i] == m_pboStrides[i]) {
+            size_t totalBlockSize = static_cast<size_t>(srcLinesizes[i]) * heights[i];
+            memcpy(dstPtr, srcData[i], totalBlockSize);
+        }
+        else {
              av_image_copy_plane(dstPtr, m_pboStrides[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
         }
     }
 
     m_pboLock.clear(std::memory_order_release);
 
-    // Swap Index atomic
     m_pboIndex = uploadIndex;
 
-    // Trigger update UI
     bool expected = false;
     if (m_updatePending.compare_exchange_strong(expected, true)) {
         QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
