@@ -94,6 +94,36 @@ if (NOT MSVC)
     add_compile_options(-Wno-nested-anon-types -Wno-c++23-extensions -Wno-overloaded-virtual)
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    
+    # Compiler Flags
+    add_compile_options(
+        -march=native -O3 -pipe -fno-plt
+        -ffunction-sections -fdata-sections
+        -flto=full
+        -fomit-frame-pointer -fno-unwind-tables
+        -fno-asynchronous-unwind-tables -fno-semantic-interposition
+        -fno-math-errno -fno-trapping-math
+    )
+
+    # Preprocessor Definitions
+    add_compile_definitions(NDEBUG QT_NO_DEBUG)
+
+    # Linker Flags (_link)
+    add_link_options(
+        -fuse-ld=mold
+        -Wl,-O3
+        -Wl,--gc-sections
+        -Wl,--icf=all
+        -Wl,--sort-common
+        -Wl,--as-needed
+        -Wl,-z,relro
+        -Wl,-z,now
+        -Wl,--hash-style=gnu
+        -flto=full
+    )
+endif()
+
 #
 # Qt
 #
