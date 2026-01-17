@@ -91,8 +91,6 @@ QYuvOpenGLWidget::~QYuvOpenGLWidget() {
         if (m_vao) glDeleteVertexArrays(1, &m_vao);
         if (m_vbo) glDeleteBuffers(1, &m_vbo);
         doneCurrent();
-    } else {
-        qWarning() << "QYuvOpenGLWidget::~QYuvOpenGLWidget: OpenGL context is not valid!";
     }
 }
 
@@ -114,14 +112,23 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
                                    std::span<const uint8_t> dataV, 
                                    int linesizeY, int linesizeU, int linesizeV)
 {
+    // 1. Cek Resize
     if (width != m_frameSize.width() || height != m_frameSize.height()) {
         if (!m_textureSizeMismatch) {
             m_textureSizeMismatch = true;
             emit requestUpdateTextures(width, height);
         }
-        return;
+        return; // Drop frame saat resize
     }
 
+    if (!m_pboSizeValid || m_textureSizeMismatch) return;
+
+    std::unique_lock<std::mutex> lock(m_pboLock, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return; 
+    }
+
+    // Double check state
     if (!m_pboSizeValid || m_textureSizeMismatch) return;
 
     int uploadIndex = (m_pboIndex + 1) % 2;
@@ -134,14 +141,6 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     
     int widths[3] = { width, halfWidth, halfWidth };
     int heights[3] = { height, halfHeight, halfHeight };
-
-    while (m_pboLock.test_and_set(std::memory_order_acquire)) { 
-    }
-
-    if (!m_pboSizeValid || m_textureSizeMismatch) {
-        m_pboLock.clear(std::memory_order_release);
-        return;
-    }
 
     for (int i = 0; i < 3; i++) {
         auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
@@ -156,7 +155,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
         }
     }
 
-    m_pboLock.clear(std::memory_order_release);
+    lock.unlock();
 
     m_pboIndex = uploadIndex;
 
@@ -170,7 +169,6 @@ void QYuvOpenGLWidget::initializeGL() {
     if (initializeOpenGLFunctions()) {
         m_isInitialized = true;
     } else {
-        qCritical() << "Initialize OpenGL Functions failed!";
         return;
     }
 
@@ -243,6 +241,10 @@ void QYuvOpenGLWidget::initTextures(int width, int height) {
 void QYuvOpenGLWidget::initPBOs(int width, int height) {
     deInitPBOs();
 
+    for(auto& set : m_pboMappedPtrs) {
+        set.fill(nullptr);
+    }
+
     m_pboStrides[0] = align64(width);
     m_pboStrides[1] = align64(width / 2);
     m_pboStrides[2] = align64(width / 2);
@@ -278,7 +280,9 @@ void QYuvOpenGLWidget::deInitTextures() {
 void QYuvOpenGLWidget::deInitPBOs() {
     if (!m_isInitialized) return;
 
-    while (m_pboLock.test_and_set(std::memory_order_acquire));
+    std::lock_guard<std::mutex> lock(m_pboLock);
+
+    m_pboSizeValid = false;
 
     for (int set = 0; set < 2; set++) {
         for (int plane = 0; plane < 3; plane++) {
@@ -290,9 +294,6 @@ void QYuvOpenGLWidget::deInitPBOs() {
             }
         }
     }
-    m_pboSizeValid = false;
-
-    m_pboLock.clear(std::memory_order_release);
 }
 
 void QYuvOpenGLWidget::resizeGL(int width, int height) {
@@ -302,7 +303,6 @@ void QYuvOpenGLWidget::resizeGL(int width, int height) {
 void QYuvOpenGLWidget::paintGL() {
     if (!m_pboSizeValid) return;
 
-    // Index frame
     int drawIndex = m_pboIndex; 
 
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
@@ -328,6 +328,3 @@ void QYuvOpenGLWidget::paintGL() {
 
     m_updatePending = false;
 }
-
-void QYuvOpenGLWidget::setVideoBuffer(VideoBuffer *vb) { m_vb = vb; }
-void QYuvOpenGLWidget::updateTextures(quint8*, quint8*, quint8*, quint32, quint32, quint32) {}

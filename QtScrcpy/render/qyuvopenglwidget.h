@@ -7,9 +7,7 @@
 #include <span>
 #include <array>
 #include <atomic>
-
-class VideoBuffer;
-struct AVFrame;
+#include <mutex>
 
 class QYuvOpenGLWidget : public QOpenGLWidget, protected QOpenGLFunctions_4_5_Core
 {
@@ -21,7 +19,6 @@ public:
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
 
-    // Fungsi utama penerima frame dari decoder
     void setFrameData(int width, int height, 
                       std::span<const uint8_t> dataY, 
                       std::span<const uint8_t> dataU, 
@@ -29,8 +26,6 @@ public:
                       int linesizeY, int linesizeU, int linesizeV);
     
     const QSize &frameSize();
-    void setVideoBuffer(VideoBuffer *vb);
-    void updateTextures(quint8 *dataY, quint8 *dataU, quint8 *dataV, quint32 linesizeY, quint32 linesizeU, quint32 linesizeV);
 
 signals:
     void requestUpdateTextures(int width, int height);
@@ -52,7 +47,6 @@ private:
 
 private:
     QSize m_frameSize = { -1, -1 };
-    VideoBuffer *m_vb = nullptr;
 
     GLuint m_vao = 0;
     GLuint m_vbo = 0;
@@ -71,7 +65,7 @@ private:
     std::atomic<bool> m_textureSizeMismatch = false;
     std::atomic<bool> m_updatePending = false;
 
-    std::atomic_flag m_pboLock = ATOMIC_FLAG_INIT;
+    std::mutex m_pboLock;
 };
 
 #endif // QYUVOPENGLWIDGET_H
