@@ -1,20 +1,12 @@
 #include "videobuffer.h"
 #include "avframeconvert.h"
 #include <QDebug>
-#include <thread>
 
 extern "C"
 {
 #include "libavutil/frame.h"
 #include "libavutil/imgutils.h"
 }
-
-#if defined(__GNUC__) || defined(__clang__)
-    #include <immintrin.h>
-    #define CPU_RELAX() _mm_pause()
-#else
-    #define CPU_RELAX() std::this_thread::yield()
-#endif
 
 VideoBuffer::VideoBuffer(QObject *parent) : QObject(parent) {
     connect(&m_fpsCounter, &FpsCounter::updateFPS, this, &VideoBuffer::updateFPS);
@@ -53,19 +45,6 @@ void VideoBuffer::deInit()
     m_fpsCounter.stop();
 }
 
-// SPINLOCK
-void VideoBuffer::lock()
-{
-    while (m_spinLock.test_and_set(std::memory_order_acquire)) {
-        CPU_RELAX();
-    }
-}
-
-void VideoBuffer::unLock()
-{
-    m_spinLock.clear(std::memory_order_release);
-}
-
 void VideoBuffer::setRenderExpiredFrames(bool renderExpiredFrames)
 {
     m_renderExpiredFrames = renderExpiredFrames;
@@ -78,7 +57,7 @@ AVFrame *VideoBuffer::decodingFrame()
 
 void VideoBuffer::offerDecodedFrame(bool &previousFrameSkipped)
 {
-    lock();
+    std::lock_guard<std::mutex> lock(m_mutex);
     
     if (!m_renderingFrameConsumed) {
         previousFrameSkipped = true;
@@ -94,8 +73,6 @@ void VideoBuffer::offerDecodedFrame(bool &previousFrameSkipped)
     m_frameGen++; 
     
     m_renderingFrameConsumed = false;
-    
-    unLock();
 }
 
 const AVFrame *VideoBuffer::consumeRenderedFrame()
@@ -111,7 +88,7 @@ const AVFrame *VideoBuffer::consumeRenderedFrame()
 
 void VideoBuffer::peekFrameInfo(int &width, int &height, int &format)
 {
-    lock();
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (m_renderingframe) {
         width = m_renderingframe->width;
         height = m_renderingframe->height;
@@ -119,21 +96,16 @@ void VideoBuffer::peekFrameInfo(int &width, int &height, int &format)
     } else {
         width = 0; height = 0; format = -1;
     }
-    unLock();
 }
 
 void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame)
 {
-    if (!onFrame) {
-        return;
-    }
+    if (!onFrame) return;
 
-    lock();
+    std::lock_guard<std::mutex> lock(m_mutex);
     
     AVFrame* frame = m_renderingframe;
-
     if (!frame || frame->width <= 0 || frame->height <= 0) {
-        unLock();
         return; 
     }
 
@@ -150,11 +122,9 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
     std::shared_ptr<std::vector<uint8_t>> targetBuffer;
 
     if (!cacheValid) {
-        
         if (m_cachedFrame && m_cachedFrame.use_count() == 1) {
             targetBuffer = m_cachedFrame;
         } else {
-            // Buffer
             targetBuffer = std::make_shared<std::vector<uint8_t>>();
         }
 
@@ -163,7 +133,6 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
             targetBuffer->resize(size);
         }
 
-        // Conversion
         AVFrame *rgbFrame = av_frame_alloc();
         if (rgbFrame) {
             av_image_fill_arrays(rgbFrame->data, rgbFrame->linesize, targetBuffer->data(), AV_PIX_FMT_RGB32, width, height, 4);
@@ -174,8 +143,6 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
             
             if (convert.init()) {
                 convert.convert(frame, rgbFrame);
-                
-                // Update State Cache
                 m_cachedFrame = targetBuffer;
                 m_cacheGen = m_frameGen;
                 m_cachedWidth = width;
@@ -183,7 +150,6 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
                 m_cachedFormat = format;
             } else {
                  qWarning() << "VideoBuffer::peekRenderedFrame convert init failed";
-                 // Reset target buffer on failure to prevent using garbage data
                  targetBuffer.reset();
             }
             convert.deInit();
@@ -194,8 +160,6 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
     } else {
         targetBuffer = m_cachedFrame;
     }
-
-    unLock();
 
     if (targetBuffer && !targetBuffer->empty()) {
         onFrame(m_cachedWidth, m_cachedHeight, targetBuffer->data());
