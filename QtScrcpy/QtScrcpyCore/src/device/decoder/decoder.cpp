@@ -115,7 +115,6 @@ void Decoder::onNewFrame()
 {
     if (!m_vb) return;
 
-    m_vb->lock();
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     
     if (m_onFrame && frame) {
@@ -127,5 +126,4 @@ void Decoder::onNewFrame()
                    spanY, spanU, spanV,
                    frame->linesize[0], frame->linesize[1], frame->linesize[2]);
     }
-    m_vb->unLock();
 }
