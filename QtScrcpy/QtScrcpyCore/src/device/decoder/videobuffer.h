@@ -29,6 +29,9 @@ public:
     void peekRenderedFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame);
     void interrupt();
 
+    signals:
+    void updateFPS(quint32 fps);
+
 private:
     void swap();
 
