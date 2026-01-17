@@ -209,8 +209,6 @@ void VideoForm::setSerial(const QString &serial)
     if (deviceImpl && deviceImpl->decoder() && m_videoWidget) {
         VideoBuffer* vb = deviceImpl->decoder()->videoBuffer();
         if (vb) {
-            m_videoWidget.data()->setVideoBuffer(vb);
-            qInfo() << "[SW] Success: VideoBuffer connected to Renderer for serial:" << serial;
         } else {
             qWarning() << "[SW] Failed: VideoBuffer is NULL!";
         }
