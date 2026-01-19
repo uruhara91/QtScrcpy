@@ -416,6 +416,7 @@ void Server::onConnectTimer()
     controlSocket->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
 
     videoSocket->connectToHost(QHostAddress::LocalHost, m_params.localPort);
+    videoSocket->setReadBufferSize(4 * 1024 * 1024);
     if (!videoSocket->waitForConnected(1000)) {
         // 连接到adb很快的，这里失败不重试
         m_connectCount = MAX_CONNECT_COUNT;
