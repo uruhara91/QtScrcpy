@@ -13,8 +13,7 @@ void TcpServer::incomingConnection(qintptr handle)
 
         if (socket->setSocketDescriptor(handle)) {
             socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
-            socket->setSocketOption(QAbstractSocket::KeepAliveOption, 1); 
-            socket->setReadBufferSize(4 * 1024 * 1024);
+            socket->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
             
             addPendingConnection(socket);
         } else {
