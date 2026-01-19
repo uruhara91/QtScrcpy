@@ -6,9 +6,6 @@
 
 VideoSocket::VideoSocket(QObject *parent) : QTcpSocket(parent)
 {
-    setSocketOption(QAbstractSocket::LowDelayOption, 1);
-    setSocketOption(QAbstractSocket::KeepAliveOption, 1);
-    setReadBufferSize(4 * 1024 * 1024);
 }
 
 VideoSocket::~VideoSocket()
