@@ -15,8 +15,8 @@ constexpr T alignUp(T value, T alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
-constexpr int align64(int width) {
-    return alignUp(width, 64);
+constexpr int align32(int width) {
+    return alignUp(width, 32);
 }
 
 // Shader Pass-through
@@ -241,9 +241,9 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
         set.fill(nullptr);
     }
 
-    m_pboStrides[0] = align64(width);
-    m_pboStrides[1] = align64(width / 2);
-    m_pboStrides[2] = align64(width / 2);
+    m_pboStrides[0] = align32(width);
+    m_pboStrides[1] = align32(width / 2);
+    m_pboStrides[2] = align32(width / 2);
 
     int sizes[3] = {
         m_pboStrides[0] * height,           

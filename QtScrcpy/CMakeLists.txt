@@ -66,7 +66,7 @@ if (MSVC)
     endif()
     
     # Optimization flags
-    add_compile_options(/O2 /Ob2 /Oi /Ot /Oy /GL /arch:AVX512 /MP)
+    add_compile_options(/O2 /Ob2 /Oi /Ot /Oy /GL /arch:AVX2 /MP)
 
     message(STATUS "[${PROJECT_NAME}] Set Warnings as error")
     # warning level 3 and all warnings as errors
