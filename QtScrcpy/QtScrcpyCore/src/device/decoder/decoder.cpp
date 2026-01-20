@@ -33,8 +33,6 @@ Decoder::~Decoder() {
 
 bool Decoder::open()
 {
-    QThread::currentThread()->setPriority(QThread::HighestPriority);
-
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
     if (!codec) return false;
 
