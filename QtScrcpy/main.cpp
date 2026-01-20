@@ -27,6 +27,8 @@ void installTranslator();
 static QtMsgType g_msgType = QtInfoMsg;
 QtMsgType covertLogLevel(const QString &logLevel);
 
+QThread::currentThread()->setPriority(QThread::HighestPriority);
+
 int main(int argc, char *argv[])
 {
     // 1. SETUP PATHS
