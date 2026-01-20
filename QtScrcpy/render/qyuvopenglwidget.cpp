@@ -19,7 +19,7 @@ constexpr int align32(int width) {
     return alignUp(width, 32);
 }
 
-// Shader Pass-through
+// Shader Vertex
 static const char *vertShader = R"(#version 450 core
 layout(location = 0) in vec3 vertexIn;
 layout(location = 1) in vec2 textureIn;
@@ -30,25 +30,32 @@ void main(void) {
 }
 )";
 
-// Shader Conversion
+// Shader Fragment
 static const char *fragShader = R"(#version 450 core
 in vec2 textureOut;
 out vec4 FragColor;
+
 layout(binding = 0) uniform sampler2D tex_y;
 layout(binding = 1) uniform sampler2D tex_u;
 layout(binding = 2) uniform sampler2D tex_v;
+
+// Column-major definition for GLSL
+const mat3 yuv2rgb = mat3(
+    1.164,  1.164,  1.164,
+    0.0,   -0.213,  2.112,
+    1.793, -0.533,  0.0
+);
+
+const vec3 yuvOffset = vec3(0.0625, 0.5, 0.5);
+const vec3 rgbOffset = vec3(0.9729, -0.30148, 1.1334);
+
 void main(void) {
     vec3 yuv;
     yuv.x = texture(tex_y, textureOut).r;
     yuv.y = texture(tex_u, textureOut).r;
     yuv.z = texture(tex_v, textureOut).r;
 
-    vec3 rgb = mat3(
-        1.164,  1.164,  1.164,
-        0.0,   -0.213,  2.112,
-        1.793, -0.533,  0.0
-    ) * yuv - vec3(0.9729, -0.30148, 1.1334);
-    FragColor = vec4(rgb, 1.0);
+    FragColor = vec4(yuv2rgb * yuv - rgbOffset, 1.0);
 }
 )";
 
@@ -57,6 +64,7 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
     format.setSwapInterval(0);
     format.setVersion(4, 5);
     format.setProfile(QSurfaceFormat::CoreProfile);
+    
     format.setRedBufferSize(8);
     format.setGreenBufferSize(8);
     format.setBlueBufferSize(8);
@@ -65,7 +73,7 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
 
     setAttribute(Qt::WA_OpaquePaintEvent);
     setAttribute(Qt::WA_NoSystemBackground);
-
+    
     setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
 
     connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h){
@@ -76,6 +84,7 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
             initTextures(w, h);
             m_textureSizeMismatch = false;
             doneCurrent();
+            
             update();
         } else {
             m_textureSizeMismatch = false; 
@@ -133,40 +142,35 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
         const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
         int srcLinesizes[3] = { linesizeY, linesizeU, linesizeV };
         
-        int halfWidth = (width + 1) / 2;
         int halfHeight = (height + 1) / 2;
-        
-        int widths[3] = { width, halfWidth, halfWidth };
         int heights[3] = { height, halfHeight, halfHeight };
-
+        
+        // PBO Mapped Write
         for (int i = 0; i < 3; i++) {
             auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
-            if (!dstPtr || !srcData[i]) continue;
-
-            if (srcLinesizes[i] == m_pboStrides[i]) {
-                size_t totalBlockSize = static_cast<size_t>(srcLinesizes[i]) * heights[i];
-                memcpy(dstPtr, srcData[i], totalBlockSize);
+            
+            if (srcLinesizes[i] == m_pboStrides[i]) [[likely]] {
+                memcpy(dstPtr, srcData[i], static_cast<size_t>(srcLinesizes[i]) * heights[i]);
             }
             else {
-                av_image_copy_plane(dstPtr, m_pboStrides[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
+                int w = (i == 0) ? width : (width + 1) / 2;
+                av_image_copy_plane(dstPtr, m_pboStrides[i], srcData[i], srcLinesizes[i], w, heights[i]);
             }
         }
         
+        // Commit upload index
         m_pboIndex.store(uploadIndex, std::memory_order_release);
     }
-
-    bool expected = false;
-    if (m_updatePending.compare_exchange_strong(expected, true)) {
+    
+    if (!m_updatePending.test_and_set(std::memory_order_acq_rel)) {
         QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
     }
 }
 
 void QYuvOpenGLWidget::initializeGL() {
-    if (initializeOpenGLFunctions()) {
-        m_isInitialized = true;
-    } else {
-        return;
-    }
+    if (!initializeOpenGLFunctions()) return;
+
+    m_isInitialized = true;
 
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
@@ -176,6 +180,7 @@ void QYuvOpenGLWidget::initializeGL() {
 
     initShader();
 
+    // Fullscreen Quad
     static const float coordinate[] = {
         -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
          1.0f, -1.0f, 0.0f,   1.0f, 1.0f,
@@ -183,6 +188,7 @@ void QYuvOpenGLWidget::initializeGL() {
          1.0f,  1.0f, 0.0f,   1.0f, 0.0f
     };
     
+    // DSA Initialization
     glCreateVertexArrays(1, &m_vao);
     glCreateBuffers(1, &m_vbo);
     glNamedBufferStorage(m_vbo, sizeof(coordinate), coordinate, 0);
@@ -201,9 +207,9 @@ void QYuvOpenGLWidget::initializeGL() {
 }
 
 void QYuvOpenGLWidget::initShader() {
-    if (!m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader)) return;
-    if (!m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShader)) return;
-    if (!m_program.link()) return;
+    m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader);
+    m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShader);
+    m_program.link();
     
     m_program.bind();
     m_program.setUniformValue("tex_y", 0);
@@ -225,8 +231,10 @@ void QYuvOpenGLWidget::initTextures(int width, int height) {
     int heights[3] = {height, height / 2, height / 2};
 
     for (int i = 0; i < 3; i++) {
+        
         glTextureParameteri(m_textures[i], GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTextureParameteri(m_textures[i], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        
         glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         
@@ -257,7 +265,9 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
         glCreateBuffers(3, m_pbos[set].data());
 
         for (int plane = 0; plane < 3; plane++) {
+            
             glNamedBufferStorage(m_pbos[set][plane], sizes[plane], nullptr, flags);
+            
             m_pboMappedPtrs[set][plane] = glMapNamedBufferRange(m_pbos[set][plane], 0, sizes[plane], flags);
         }
     }
@@ -266,7 +276,6 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
 
 void QYuvOpenGLWidget::deInitTextures() {
     if (!m_isInitialized) return;
-
     if (m_textures[0] != 0) {
         glDeleteTextures(3, m_textures.data());
         std::ranges::fill(m_textures, 0);
@@ -275,9 +284,7 @@ void QYuvOpenGLWidget::deInitTextures() {
 
 void QYuvOpenGLWidget::deInitPBOs() {
     if (!m_isInitialized) return;
-
     std::lock_guard<std::mutex> lock(m_pboLock);
-
     m_pboSizeValid = false;
 
     for (int set = 0; set < 2; set++) {
@@ -299,7 +306,7 @@ void QYuvOpenGLWidget::resizeGL(int width, int height) {
 void QYuvOpenGLWidget::paintGL() {
     if (!m_pboSizeValid) return;
 
-    int drawIndex = m_pboIndex; 
+    int drawIndex = m_pboIndex.load(std::memory_order_acquire);
 
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
     int heights[3] = {m_frameSize.height(), m_frameSize.height() / 2, m_frameSize.height() / 2};
@@ -307,20 +314,24 @@ void QYuvOpenGLWidget::paintGL() {
     m_program.bind();
     glBindVertexArray(m_vao);
 
+    // DSA Texture Update
     for (int i = 0; i < 3; i++) {
         glBindTextureUnit(i, m_textures[i]);
+        
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, m_pboStrides[i]);
+        
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, m_pboStrides[i] / 1);
+        
         glTextureSubImage2D(m_textures[i], 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
-
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     }
 
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
     glBindVertexArray(0);
     m_program.release();
 
-    m_updatePending = false;
+    m_updatePending.clear(std::memory_order_release);
 }

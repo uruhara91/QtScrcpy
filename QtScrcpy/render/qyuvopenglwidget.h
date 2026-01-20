@@ -53,8 +53,8 @@ private:
     QOpenGLShaderProgram m_program;
 
     std::array<GLuint, 3> m_textures = {0, 0, 0}; 
-    std::array<std::array<GLuint, 3>, 2> m_pbos = {{ {0,0,0}, {0,0,0} }};
     
+    std::array<std::array<GLuint, 3>, 2> m_pbos = {{ {0,0,0}, {0,0,0} }};
     std::array<std::array<void*, 3>, 2> m_pboMappedPtrs = {{ {nullptr}, {nullptr} }};
     std::array<int, 3> m_pboStrides = {0, 0, 0};
     
@@ -63,7 +63,8 @@ private:
 
     std::atomic<int> m_pboIndex = 0;
     std::atomic<bool> m_textureSizeMismatch = false;
-    std::atomic<bool> m_updatePending = false;
+    
+    std::atomic_flag m_updatePending = ATOMIC_FLAG_INIT;
 
     std::mutex m_pboLock;
 };
