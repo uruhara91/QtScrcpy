@@ -112,52 +112,48 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
                                    std::span<const uint8_t> dataV, 
                                    int linesizeY, int linesizeU, int linesizeV)
 {
-    // 1. Cek Resize
-    if (width != m_frameSize.width() || height != m_frameSize.height()) {
+    if (width != m_frameSize.width() || height != m_frameSize.height()) [[unlikely]] {
         if (!m_textureSizeMismatch) {
             m_textureSizeMismatch = true;
             emit requestUpdateTextures(width, height);
         }
-        return; // Drop frame saat resize
-    }
-
-    if (!m_pboSizeValid || m_textureSizeMismatch) return;
-
-    std::unique_lock<std::mutex> lock(m_pboLock, std::try_to_lock);
-    if (!lock.owns_lock()) {
         return; 
     }
 
-    // Double check state
     if (!m_pboSizeValid || m_textureSizeMismatch) return;
 
-    int uploadIndex = (m_pboIndex + 1) % 2;
-
-    const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
-    int srcLinesizes[3] = { linesizeY, linesizeU, linesizeV };
+    int currentIndex = m_pboIndex.load(std::memory_order_acquire);
+    int uploadIndex = (currentIndex + 1) % 2;
     
-    int halfWidth = (width + 1) / 2;
-    int halfHeight = (height + 1) / 2;
-    
-    int widths[3] = { width, halfWidth, halfWidth };
-    int heights[3] = { height, halfHeight, halfHeight };
+    {
+        std::lock_guard<std::mutex> lock(m_pboLock); 
 
-    for (int i = 0; i < 3; i++) {
-        auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
-        if (!dstPtr || !srcData[i]) continue;
+        if (!m_pboSizeValid) return;
 
-        if (srcLinesizes[i] == m_pboStrides[i]) {
-            size_t totalBlockSize = static_cast<size_t>(srcLinesizes[i]) * heights[i];
-            memcpy(dstPtr, srcData[i], totalBlockSize);
+        const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
+        int srcLinesizes[3] = { linesizeY, linesizeU, linesizeV };
+        
+        int halfWidth = (width + 1) / 2;
+        int halfHeight = (height + 1) / 2;
+        
+        int widths[3] = { width, halfWidth, halfWidth };
+        int heights[3] = { height, halfHeight, halfHeight };
+
+        for (int i = 0; i < 3; i++) {
+            auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
+            if (!dstPtr || !srcData[i]) continue;
+
+            if (srcLinesizes[i] == m_pboStrides[i]) {
+                size_t totalBlockSize = static_cast<size_t>(srcLinesizes[i]) * heights[i];
+                memcpy(dstPtr, srcData[i], totalBlockSize);
+            }
+            else {
+                av_image_copy_plane(dstPtr, m_pboStrides[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
+            }
         }
-        else {
-             av_image_copy_plane(dstPtr, m_pboStrides[i], srcData[i], srcLinesizes[i], widths[i], heights[i]);
-        }
+        
+        m_pboIndex.store(uploadIndex, std::memory_order_release);
     }
-
-    lock.unlock();
-
-    m_pboIndex = uploadIndex;
 
     bool expected = false;
     if (m_updatePending.compare_exchange_strong(expected, true)) {

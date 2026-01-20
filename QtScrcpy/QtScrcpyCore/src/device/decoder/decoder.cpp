@@ -77,14 +77,18 @@ bool Decoder::push(const AVPacket *packet)
         return false;
     }
 
-    AVFrame *decodingFrame = m_vb->decodingFrame();
-    
-    ret = avcodec_receive_frame(m_codecCtx.get(), decodingFrame);
-    if (ret == 0) {
-        pushFrame();
-    } else if (ret != AVERROR(EAGAIN)) {
-        qWarning("Decoder receive error: %d", ret);
-        return false;
+    while (true) {
+        AVFrame *decodingFrame = m_vb->decodingFrame();
+        
+        ret = avcodec_receive_frame(m_codecCtx.get(), decodingFrame);
+        if (ret == 0) {
+            pushFrame();
+        } else if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+            break;
+        } else {
+            qWarning("Decoder receive error: %d", ret);
+            return false;
+        }
     }
     
     return true;
