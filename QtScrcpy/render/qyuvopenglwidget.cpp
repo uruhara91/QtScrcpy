@@ -63,6 +63,7 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
     QSurfaceFormat format;
     format.setVersion(4, 5);
     format.setProfile(QSurfaceFormat::CoreProfile);
+    format.setSwapInterval(0);
     
     format.setRedBufferSize(8);
     format.setGreenBufferSize(8);
