@@ -61,7 +61,6 @@ void main(void) {
 
 QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
     QSurfaceFormat format;
-    format.setSwapInterval(0);
     format.setVersion(4, 5);
     format.setProfile(QSurfaceFormat::CoreProfile);
     
