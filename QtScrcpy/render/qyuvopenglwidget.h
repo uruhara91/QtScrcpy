@@ -28,7 +28,7 @@ public:
     const QSize &frameSize();
 
 signals:
-    void requestUpdateTextures(int width, int height);
+    void requestUpdateTextures(int width, int height, int strideY, int strideU, int strideV);
 
 protected:
     void initializeGL() override;
@@ -40,7 +40,7 @@ private:
     void initTextures(int width, int height);
     void deInitTextures();
     
-    void initPBOs(int width, int height);
+    void initPBOs(int width, int height, int strideY, int strideU, int strideV);
     void deInitPBOs();
     
     void setFrameSize(const QSize &frameSize);

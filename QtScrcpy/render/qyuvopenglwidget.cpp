@@ -76,12 +76,15 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
     
     setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
 
-    connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h){
+    connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, 
+        [this](int w, int h, int strideY, int strideU, int strideV){
         if (isValid()) {
             makeCurrent();
             setFrameSize(QSize(w, h));
-            initPBOs(w, h);
+            
+            initPBOs(w, h, strideY, strideU, strideV); 
             initTextures(w, h);
+            
             m_textureSizeMismatch = false;
             doneCurrent();
             
@@ -121,12 +124,18 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
                                    std::span<const uint8_t> dataV, 
                                    int linesizeY, int linesizeU, int linesizeV)
 {
-    if (width != m_frameSize.width() || height != m_frameSize.height()) [[unlikely]] {
+    bool sizeMismatch = (width != m_frameSize.width() || height != m_frameSize.height());
+    bool strideMismatch = (linesizeY != m_pboStrides[0] || 
+                           linesizeU != m_pboStrides[1] || 
+                           linesizeV != m_pboStrides[2]);
+
+    if (sizeMismatch || strideMismatch) [[unlikely]] {
         if (!m_textureSizeMismatch) {
             m_textureSizeMismatch = true;
-            emit requestUpdateTextures(width, height);
+            
+            emit requestUpdateTextures(width, height, linesizeY, linesizeU, linesizeV);
         }
-        return; 
+        return;
     }
 
     if (!m_pboSizeValid || m_textureSizeMismatch) return;
@@ -140,25 +149,16 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
         if (!m_pboSizeValid) return;
 
         const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
-        int srcLinesizes[3] = { linesizeY, linesizeU, linesizeV };
         
         int halfHeight = (height + 1) / 2;
         int heights[3] = { height, halfHeight, halfHeight };
         
-        // PBO Mapped Write
         for (int i = 0; i < 3; i++) {
             auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
             
-            if (srcLinesizes[i] == m_pboStrides[i]) [[likely]] {
-                memcpy(dstPtr, srcData[i], static_cast<size_t>(srcLinesizes[i]) * heights[i]);
-            }
-            else {
-                int w = (i == 0) ? width : (width + 1) / 2;
-                av_image_copy_plane(dstPtr, m_pboStrides[i], srcData[i], srcLinesizes[i], w, heights[i]);
-            }
+            memcpy(dstPtr, srcData[i], static_cast<size_t>(m_pboStrides[i]) * heights[i]);
         }
         
-        // Commit upload index
         m_pboIndex.store(uploadIndex, std::memory_order_release);
     }
     
@@ -242,16 +242,16 @@ void QYuvOpenGLWidget::initTextures(int width, int height) {
     }
 }
 
-void QYuvOpenGLWidget::initPBOs(int width, int height) {
+void QYuvOpenGLWidget::initPBOs(int width, int height, int strideY, int strideU, int strideV) {
     deInitPBOs();
 
     for(auto& set : m_pboMappedPtrs) {
         set.fill(nullptr);
     }
 
-    m_pboStrides[0] = align32(width);
-    m_pboStrides[1] = align32(width / 2);
-    m_pboStrides[2] = align32(width / 2);
+    m_pboStrides[0] = strideY;
+    m_pboStrides[1] = strideU;
+    m_pboStrides[2] = strideV;
 
     int sizes[3] = {
         m_pboStrides[0] * height,           
@@ -265,9 +265,7 @@ void QYuvOpenGLWidget::initPBOs(int width, int height) {
         glCreateBuffers(3, m_pbos[set].data());
 
         for (int plane = 0; plane < 3; plane++) {
-            
             glNamedBufferStorage(m_pbos[set][plane], sizes[plane], nullptr, flags);
-            
             m_pboMappedPtrs[set][plane] = glMapNamedBufferRange(m_pbos[set][plane], 0, sizes[plane], flags);
         }
     }
