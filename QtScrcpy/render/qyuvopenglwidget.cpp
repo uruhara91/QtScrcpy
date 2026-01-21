@@ -124,39 +124,37 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
                                    std::span<const uint8_t> dataV, 
                                    int linesizeY, int linesizeU, int linesizeV)
 {
-    bool sizeMismatch = (width != m_frameSize.width() || height != m_frameSize.height());
-    bool strideMismatch = (linesizeY != m_pboStrides[0] || 
-                           linesizeU != m_pboStrides[1] || 
-                           linesizeV != m_pboStrides[2]);
+    bool sizeChanged = (width != m_frameSize.width() || height != m_frameSize.height());
+    bool strideChanged = (linesizeY != m_pboStrides[0] || 
+                          linesizeU != m_pboStrides[1] || 
+                          linesizeV != m_pboStrides[2]);
 
-    if (sizeMismatch || strideMismatch) [[unlikely]] {
+    if (sizeChanged || strideChanged || !m_pboSizeValid) [[unlikely]] {
         if (!m_textureSizeMismatch) {
             m_textureSizeMismatch = true;
-            
+
             emit requestUpdateTextures(width, height, linesizeY, linesizeU, linesizeV);
         }
         return;
     }
 
-    if (!m_pboSizeValid || m_textureSizeMismatch) return;
-
+    if (m_textureSizeMismatch) return;
+    
     int currentIndex = m_pboIndex.load(std::memory_order_acquire);
-    int uploadIndex = (currentIndex + 1) % 2;
+    int uploadIndex = (currentIndex + 1) % 2; 
     
     {
         std::lock_guard<std::mutex> lock(m_pboLock); 
-
         if (!m_pboSizeValid) return;
 
         const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
-        
-        int halfHeight = (height + 1) / 2;
-        int heights[3] = { height, halfHeight, halfHeight };
+        int heights[3] = { height, (height + 1) / 2, (height + 1) / 2 };
         
         for (int i = 0; i < 3; i++) {
             auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
+            size_t totalBytes = static_cast<size_t>(m_pboStrides[i]) * heights[i];
             
-            memcpy(dstPtr, srcData[i], static_cast<size_t>(m_pboStrides[i]) * heights[i]);
+            memcpy(dstPtr, srcData[i], totalBytes);
         }
         
         m_pboIndex.store(uploadIndex, std::memory_order_release);
@@ -255,8 +253,8 @@ void QYuvOpenGLWidget::initPBOs(int width, int height, int strideY, int strideU,
 
     int sizes[3] = {
         m_pboStrides[0] * height,           
-        m_pboStrides[1] * (height / 2),
-        m_pboStrides[2] * (height / 2)
+        m_pboStrides[1] * ((height + 1) / 2),
+        m_pboStrides[2] * ((height + 1) / 2)
     };
 
     GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
