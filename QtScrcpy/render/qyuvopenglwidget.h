@@ -67,6 +67,8 @@ private:
     std::atomic_flag m_updatePending = ATOMIC_FLAG_INIT;
 
     std::mutex m_pboLock;
+
+    std::array<GLsync, 2> m_fences = {nullptr, nullptr};
 };
 
 #endif // QYUVOPENGLWIDGET_H

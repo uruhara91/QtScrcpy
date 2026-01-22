@@ -141,7 +141,18 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     if (m_textureSizeMismatch) return;
     
     int currentIndex = m_pboIndex.load(std::memory_order_acquire);
-    int uploadIndex = (currentIndex + 1) % 2; 
+    int uploadIndex = (currentIndex + 1) % 2;
+    
+    if (m_fences[uploadIndex]) {
+        GLenum result = glClientWaitSync(m_fences[uploadIndex], GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+        
+        if (result == GL_TIMEOUT_EXPIRED || result == GL_WAIT_FAILED) {
+            return; 
+        }
+        
+        glDeleteSync(m_fences[uploadIndex]);
+        m_fences[uploadIndex] = nullptr;
+    }
     
     {
         std::lock_guard<std::mutex> lock(m_pboLock); 
@@ -153,7 +164,6 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
         for (int i = 0; i < 3; i++) {
             auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
             size_t totalBytes = static_cast<size_t>(m_pboStrides[i]) * heights[i];
-            
             memcpy(dstPtr, srcData[i], totalBytes);
         }
         
@@ -293,6 +303,13 @@ void QYuvOpenGLWidget::deInitPBOs() {
             }
         }
     }
+
+    for (int i = 0; i < 2; i++) {
+        if (m_fences[i]) {
+            glDeleteSync(m_fences[i]);
+            m_fences[i] = nullptr;
+        }
+    }
 }
 
 void QYuvOpenGLWidget::resizeGL(int width, int height) {
@@ -326,8 +343,15 @@ void QYuvOpenGLWidget::paintGL() {
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
+    if (m_fences[drawIndex]) {
+        glDeleteSync(m_fences[drawIndex]);
+    }
+    
+    m_fences[drawIndex] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+
     glBindVertexArray(0);
     m_program.release();
 
     m_updatePending.clear(std::memory_order_release);
+}
 }
