@@ -144,9 +144,14 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     int uploadIndex = (currentIndex + 1) % 2;
     
     if (m_fences[uploadIndex]) {
-        GLenum result = glClientWaitSync(m_fences[uploadIndex], GL_SYNC_FLUSH_COMMANDS_BIT, 1000000);
+        GLenum result = glClientWaitSync(m_fences[uploadIndex], GL_SYNC_FLUSH_COMMANDS_BIT, 0);
         
         if (result == GL_TIMEOUT_EXPIRED || result == GL_WAIT_FAILED) {
+            static int dropCount = 0;
+            if (++dropCount % 60 == 0) {
+                 qWarning() << "Frame DROPPED! GPU belum siap (Total drops:" << dropCount << ")";
+            }
+
             return; 
         }
         
