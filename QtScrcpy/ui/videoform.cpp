@@ -627,6 +627,7 @@ void VideoForm::mousePressEvent(QMouseEvent *event)
         QMouseEvent newEvent(event->type(), mappedPos, globalPos, event->button(), event->buttons(), event->modifiers());
         emit device->mouseEvent(&newEvent, m_videoWidget.data()->frameSize(), m_videoWidget.data()->size());
 
+        /*
         if (event->button() == Qt::LeftButton) {
             qreal x = localPos.x() / m_videoWidget.data()->size().width();
             qreal y = localPos.y() / m_videoWidget.data()->size().height();
@@ -634,6 +635,8 @@ void VideoForm::mousePressEvent(QMouseEvent *event)
             qInfo() << posTip.toStdString().c_str();
         }
     } else {
+        */
+    
         if (event->button() == Qt::LeftButton) {
             m_dragPosition = globalPos.toPoint() - frameGeometry().topLeft();
             event->accept();
