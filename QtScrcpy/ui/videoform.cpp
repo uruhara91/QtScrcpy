@@ -634,9 +634,8 @@ void VideoForm::mousePressEvent(QMouseEvent *event)
             QString posTip = QString(R"("pos": {"x": %1, "y": %2})").arg(x).arg(y);
             qInfo() << posTip.toStdString().c_str();
         }
-    } else {
         */
-    
+    } else {
         if (event->button() == Qt::LeftButton) {
             m_dragPosition = globalPos.toPoint() - frameGeometry().topLeft();
             event->accept();

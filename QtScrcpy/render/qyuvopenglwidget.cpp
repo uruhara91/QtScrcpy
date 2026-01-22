@@ -151,7 +151,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
         qint64 delta = timer.restart();
         
         if (delta > 34) { 
-             qWarning() << "[INPUT LAG] Frame telat datang dari Decoder! Delta:" << delta << "ms";
+             qWarning() << "Frame telat dari Decoder! Delta:" << delta << "ms";
         }
     }
     
@@ -164,7 +164,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
         if (result == GL_TIMEOUT_EXPIRED || result == GL_WAIT_FAILED) {
             static int dropCount = 0;
             dropCount++;
-            qWarning() << "[STUTTER DETECTED] Frame DROPPED! GPU busy. Total drops:" << dropCount;
+            qWarning() << "Frame DROPPED! GPU busy. Total drops:" << dropCount;
 
             return; 
         }
@@ -179,11 +179,19 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
 
         const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
         int heights[3] = { height, (height + 1) / 2, (height + 1) / 2 };
+
+        QElapsedTimer timer;
+        timer.start();
         
         for (int i = 0; i < 3; i++) {
             auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
             size_t totalBytes = static_cast<size_t>(m_pboStrides[i]) * heights[i];
             memcpy(dstPtr, srcData[i], totalBytes);
+        }
+
+        qint64 duration = timer.nsecsElapsed();
+        if (duration > 5000000) {
+             qWarning() << "[SLOW MEMCPY] Copy texture lama:" << duration / 1000000.0 << "ms";
         }
         
         m_pboIndex.store(uploadIndex, std::memory_order_release);
