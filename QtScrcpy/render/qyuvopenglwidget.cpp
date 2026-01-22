@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <concepts>
+#include <QElapsedTimer>
 
 extern "C" {
 #include <libavutil/imgutils.h>
@@ -139,6 +140,20 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     }
 
     if (m_textureSizeMismatch) return;
+
+    static QElapsedTimer timer;
+    static bool firstRun = true;
+    
+    if (firstRun) {
+        timer.start();
+        firstRun = false;
+    } else {
+        qint64 delta = timer.restart();
+        
+        if (delta > 34) { 
+             qWarning() << "[INPUT LAG] Frame telat datang dari Decoder! Delta:" << delta << "ms";
+        }
+    }
     
     int currentIndex = m_pboIndex.load(std::memory_order_acquire);
     int uploadIndex = (currentIndex + 1) % 2;
