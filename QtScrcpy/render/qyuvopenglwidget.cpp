@@ -82,7 +82,7 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
             makeCurrent();
             setFrameSize(QSize(w, h));
             
-            initPBOs(w, h, strideY, strideU, strideV); 
+            initPBOs(h, strideY, strideU, strideV); 
             initTextures(w, h);
             
             m_textureSizeMismatch = false;
@@ -240,7 +240,7 @@ void QYuvOpenGLWidget::initTextures(int width, int height) {
     }
 }
 
-void QYuvOpenGLWidget::initPBOs(int width, int height, int strideY, int strideU, int strideV) {
+void QYuvOpenGLWidget::initPBOs(int height, int strideY, int strideU, int strideV) {
     deInitPBOs();
 
     for(auto& set : m_pboMappedPtrs) {
