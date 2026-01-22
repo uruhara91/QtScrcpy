@@ -148,9 +148,8 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
         
         if (result == GL_TIMEOUT_EXPIRED || result == GL_WAIT_FAILED) {
             static int dropCount = 0;
-            if (++dropCount % 60 == 0) {
-                 qWarning() << "Frame DROPPED! GPU belum siap (Total drops:" << dropCount << ")";
-            }
+            dropCount++;
+            qWarning() << "[STUTTER DETECTED] Frame DROPPED! GPU busy. Total drops:" << dropCount;
 
             return; 
         }
