@@ -354,4 +354,3 @@ void QYuvOpenGLWidget::paintGL() {
 
     m_updatePending.clear(std::memory_order_release);
 }
-}
