@@ -27,22 +27,27 @@ Device::Device(DeviceParams params, QObject *parent) : IDevice(parent), m_params
     }
 
     if (params.display) {
-        m_decoder = std::make_unique<Decoder>([this](int width, int height, 
-                                   std::span<const uint8_t> dataY, 
-                                   std::span<const uint8_t> dataU, 
-                                   std::span<const uint8_t> dataV, 
-                                   int linesizeY, int linesizeU, int linesizeV) {
+        auto decoderCallback = [this](int width, int height, 
+                                      std::span<const uint8_t> dataY, 
+                                      std::span<const uint8_t> dataU, 
+                                      std::span<const uint8_t> dataV, 
+                                      int linesizeY, int linesizeU, int linesizeV) {
             for (const auto& item : m_deviceObservers) {
                 item->onFrame(width, height, dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
             }
-        }, nullptr);
+        };
+
+        // Pass variabel callback
+        m_decoder = std::make_unique<Decoder>(decoderCallback, nullptr);
 
         m_fileHandler = std::make_unique<FileHandler>(nullptr);
         
-        m_controller = std::make_unique<Controller>([this](const QByteArray& buffer) -> qint64 {
+        auto controllerCallback = [this](const QByteArray& buffer) -> qint64 {
             if (!m_server || !m_server->getControlSocket()) return 0;
             return m_server->getControlSocket()->write(buffer.data(), buffer.length());
-        }, params.gameScript, nullptr);
+        };
+
+        m_controller = std::make_unique<Controller>(controllerCallback, params.gameScript, nullptr);
     }
 
     m_stream = std::make_unique<Demuxer>(nullptr);
@@ -52,12 +57,13 @@ Device::Device(DeviceParams params, QObject *parent) : IDevice(parent), m_params
         QString absFilePath;
         QString fileDir(m_params.recordPath);
         if (!fileDir.isEmpty()) {
+            // Gunakan format string yang efisien
             QDateTime dateTime = QDateTime::currentDateTime();
-            QString fileName = dateTime.toString("_yyyyMMdd_hhmmss_zzz");
-            fileName = m_params.serial + fileName;
+            QString fileName = m_params.serial + "_" + dateTime.toString("yyyyMMdd_hhmmss_zzz");
             fileName.replace(":", "_");
             fileName.replace(".", "_");
             fileName += ("." + m_params.recordFileFormat);
+            
             QDir dir(fileDir);
             if (!dir.exists()) {
                 if (!dir.mkpath(fileDir)) {
@@ -115,7 +121,6 @@ void Device::screenshot()
         return;
     }
 
-    // screenshot
     m_decoder->peekFrame([this](int width, int height, uint8_t* dataRGB32) {
        saveFrame(width, height, dataRGB32);
     });
@@ -149,14 +154,14 @@ bool Device::isReversePort(quint16 port)
 void Device::initSignals()
 {
     if (m_controller) {
-        connect(m_controller, &Controller::grabCursor, this, [this](bool grab){
+        connect(m_controller.get(), &Controller::grabCursor, this, [this](bool grab){
             for (const auto& item : m_deviceObservers) {
                 item->grabCursor(grab);
             }
         });
     }
     if (m_fileHandler) {
-        connect(m_fileHandler, &FileHandler::fileHandlerResult, this, [this](FileHandler::FILE_HANDLER_RESULT processResult, bool isApk) {
+        connect(m_fileHandler.get(), &FileHandler::fileHandlerResult, this, [this](FileHandler::FILE_HANDLER_RESULT processResult, bool isApk) {
             QString tipsType = "";
             if (isApk) {
                 tipsType = "install apk";
@@ -178,7 +183,7 @@ void Device::initSignals()
     }
 
     if (m_server) {
-        connect(m_server, &Server::serverStarted, this, [this](bool success, const QString &deviceName, const QSize &size) {
+        connect(m_server.get(), &Server::serverStarted, this, [this](bool success, const QString &deviceName, const QSize &size) {
             m_serverStartSuccess = success;
             emit deviceConnected(success, m_params.serial, deviceName, size);
             if (success) {
@@ -208,24 +213,20 @@ void Device::initSignals()
 
                 // recv device msg
                 connect(m_server->getControlSocket(), &QTcpSocket::readyRead, this, [this](){
-                    if (!m_controller) {
-                        return;
-                    }
+                    if (!m_controller) return;
 
                     auto controlSocket = m_server->getControlSocket();
                     while (controlSocket->bytesAvailable()) {
                         QByteArray byteArray = controlSocket->peek(controlSocket->bytesAvailable());
                         DeviceMsg deviceMsg;
                         qint32 consume = deviceMsg.deserialize(byteArray);
-                        if (0 >= consume) {
-                            break;
-                        }
+                        if (0 >= consume) break;
+                        
                         controlSocket->read(consume);
                         m_controller->recvDeviceMsg(&deviceMsg);
                     }
                 });
 
-                // 显示界面时才自动息屏（m_params.display）
                 if (m_params.closeScreen && m_params.display && m_controller) {
                     m_controller->setDisplayPower(false);
                 }
@@ -233,19 +234,19 @@ void Device::initSignals()
                 m_server->stop();
             }
         });
-        connect(m_server, &Server::serverStoped, this, [this]() {
+        connect(m_server.get(), &Server::serverStoped, this, [this]() {
             disconnectDevice();
             qDebug() << "server process stop";
         });
     }
 
     if (m_stream) {
-        connect(m_stream, &Demuxer::onStreamStop, this, [this]() {
+        connect(m_stream.get(), &Demuxer::onStreamStop, this, [this]() {
             disconnectDevice();
             qDebug() << "stream thread stop";
         });
 
-        connect(m_stream, &Demuxer::getFrame, this, [this](AVPacket *packet) {
+        connect(m_stream.get(), &Demuxer::getFrame, this, [this](AVPacket *packet) {
             
             if (m_recorder) {
                 AVPacket *recPacket = av_packet_clone(packet);
@@ -257,7 +258,7 @@ void Device::initSignals()
             }
 
             if (m_decoder) {
-                bool sent = QMetaObject::invokeMethod(m_decoder, "onDecodeFrame", 
+                bool sent = QMetaObject::invokeMethod(m_decoder.get(), "onDecodeFrame", 
                                           Qt::QueuedConnection, 
                                           Q_ARG(AVPacket*, packet));
                 if (!sent) {
@@ -269,7 +270,7 @@ void Device::initSignals()
 
         }, Qt::DirectConnection);
 
-        connect(m_stream, &Demuxer::getConfigFrame, this, [this](AVPacket *packet) {
+        connect(m_stream.get(), &Demuxer::getConfigFrame, this, [this](AVPacket *packet) {
             if (m_recorder) {
                 if (!m_recorder->push(packet)) {
                     av_packet_free(&packet);
@@ -282,7 +283,7 @@ void Device::initSignals()
     }
 
     if (m_decoder) {
-        connect(m_decoder, &Decoder::updateFPS, this, [this](quint32 fps) {
+        connect(m_decoder.get(), &Decoder::updateFPS, this, [this](quint32 fps) {
             for (const auto& item : m_deviceObservers) {
                 item->updateFPS(fps);
             }
@@ -296,14 +297,8 @@ bool Device::connectDevice()
         return false;
     }
 
-    // fix: macos cant recv finished signel, timer is ok
     QTimer::singleShot(0, this, [this]() {
         m_startTimeCount.start();
-        // max size support 480p 720p 1080p 设备原生分辨率
-        // support wireless connect, example:
-        //m_server->start("192.168.0.174:5555", 27183, m_maxSize, m_bitRate, "");
-        // only one devices, serial can be null
-        // mark: crop input format: "width:height:x:y" or "" for no crop, for example: "100:200:0:0"
         Server::ServerParams params;
         params.serverLocalPath = m_params.serverLocalPath;
         params.serverRemotePath = m_params.serverRemotePath;
@@ -640,34 +635,19 @@ bool Device::isCurrentCustomKeymap()
 
 bool Device::saveFrame(int width, int height, uint8_t* dataRGB32)
 {
-    if (!dataRGB32) {
-        return false;
-    }
-
+    if (!dataRGB32) return false;
     QImage rgbImage(dataRGB32, width, height, QImage::Format_RGB32);
-
-    // save
-    QString absFilePath;
     QString fileDir(m_params.recordPath);
     if (fileDir.isEmpty()) {
         qWarning() << "please select record save path!!!";
         return false;
     }
     QDateTime dateTime = QDateTime::currentDateTime();
-    QString fileName = dateTime.toString("_yyyyMMdd_hhmmss_zzz");
-    fileName = m_params.serial + fileName;
+    QString fileName = m_params.serial + "_" + dateTime.toString("yyyyMMdd_hhmmss_zzz") + ".png";
     fileName.replace(":", "_");
     fileName.replace(".", "_");
-    fileName += ".png";
     QDir dir(fileDir);
-    absFilePath = dir.absoluteFilePath(fileName);
-    int ret = rgbImage.save(absFilePath, "PNG", 100);
-    if (!ret) {
-        return false;
-    }
-
-    qInfo() << "screenshot save to " << absFilePath;
-    return true;
+    return rgbImage.save(dir.absoluteFilePath(fileName), "PNG", 100);
 }
 
 }
