@@ -4,6 +4,7 @@
 #include <QTimer>
 #include <QTime>
 #include <QRandomGenerator>
+#include <QElapsedTimer>
 
 #include "inputconvertgame.h"
 
@@ -583,15 +584,18 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
 
     if (m_ctrlMouseMove.ignoreCount > 0) {
         --m_ctrlMouseMove.ignoreCount;
+        moveCursorTo(from, centerPos);
         return true;
     }
 
     if (m_processMouseMove) {
-
         QPointF distance_raw = QPointF(currentPos) - QPointF(centerPos);
+        QPointF speedRatio = m_keyMap.getMouseMoveMap().data.mouseMove.speedRatio;
         
-        QPointF speedRatio  {m_keyMap.getMouseMoveMap().data.mouseMove.speedRatio};
-        QPointF distance    {distance_raw.x() / speedRatio.x(), distance_raw.y() / speedRatio.y()};
+        if (qFuzzyIsNull(speedRatio.x())) speedRatio.setX(1.0);
+        if (qFuzzyIsNull(speedRatio.y())) speedRatio.setY(1.0);
+
+        QPointF distance {distance_raw.x() / speedRatio.x(), distance_raw.y() / speedRatio.y()};
 
         mouseMoveStartTouch(from);
         startMouseMoveTimer();
@@ -599,9 +603,9 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
         m_ctrlMouseMove.lastConverPos.setX(m_ctrlMouseMove.lastConverPos.x() + distance.x() / m_showSize.width());
         m_ctrlMouseMove.lastConverPos.setY(m_ctrlMouseMove.lastConverPos.y() + distance.y() / m_showSize.height());
 
-        // Boundary check
-        if (m_ctrlMouseMove.lastConverPos.x() < 0.05 || m_ctrlMouseMove.lastConverPos.x() > 0.95 || m_ctrlMouseMove.lastConverPos.y() < 0.05
-            || m_ctrlMouseMove.lastConverPos.y() > 0.95) {
+        if (m_ctrlMouseMove.lastConverPos.x() < 0.05 || m_ctrlMouseMove.lastConverPos.x() > 0.95 || 
+            m_ctrlMouseMove.lastConverPos.y() < 0.05 || m_ctrlMouseMove.lastConverPos.y() > 0.95) {
+            
             if (m_ctrlMouseMove.smallEyes) {
                 m_processMouseMove = false;
                 int delay = 30;
@@ -613,17 +617,23 @@ bool InputConvertGame::processMouseMove(const QMouseEvent *from)
             } else {
                 mouseMoveStopTouch();
                 m_ctrlMouseMove.ignoreCount = 5;
-
                 moveCursorTo(from, centerPos);
                 return true;
             }
         }
 
-        sendTouchMoveEvent(getTouchID(Qt::ExtraButton24), m_ctrlMouseMove.lastConverPos);
+        static QElapsedTimer paceTimer;
+        if (!paceTimer.isValid()) {
+            paceTimer.start();
+        }
+
+        if (paceTimer.elapsed() >= 8) { 
+            sendTouchMoveEvent(getTouchID(Qt::ExtraButton24), m_ctrlMouseMove.lastConverPos);
+            paceTimer.restart();
+        }
     }
     
     moveCursorTo(from, centerPos);
-
     m_ctrlMouseMove.lastPos = QPointF(centerPos);
 
     return true;
