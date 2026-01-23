@@ -19,9 +19,10 @@ public:
 
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
-    const QSize &frameSize();
 
-    // Data dari Decoder
+    const QSize &frameSize();
+    void setFrameSize(const QSize &frameSize);
+
     void setFrameData(int width, int height,
                       std::span<const uint8_t> dataY,
                       std::span<const uint8_t> dataU,
@@ -44,7 +45,7 @@ private:
     void deInitPBOs();
 
 private:
-    // OpenGL Resources
+    // Resources
     GLuint m_vao = 0;
     GLuint m_vbo = 0;
     QOpenGLShaderProgram m_program;
@@ -55,7 +56,7 @@ private:
     std::array<std::array<void*, 3>, 2> m_pboMappedPtrs;
     std::array<int, 3> m_pboStrides = {0, 0, 0};
 
-    // Synchronization
+    // Sync
     std::atomic<int> m_pboIndex = 0; // 0 atau 1
     std::atomic_flag m_updatePending = ATOMIC_FLAG_INIT;
     std::mutex m_pboLock;
