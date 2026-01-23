@@ -24,7 +24,9 @@ Demuxer::~Demuxer()
 
 static void avLogCallback(void *avcl, int level, const char *fmt, va_list vl)
 {
-    Q_UNUSED(avcl)
+    Q_UNUSED(avcl);
+    Q_UNUSED(vl);
+
     if (level > AV_LOG_WARNING) return;
 
     QString localFmt = QString::fromUtf8(fmt).trimmed();
