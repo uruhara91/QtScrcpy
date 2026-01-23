@@ -22,7 +22,6 @@ Decoder::Decoder(FrameCallback onFrame, QObject *parent)
     , m_onFrame(std::move(onFrame))
 {
     if (m_vb) {
-        m_vb->init();
         connect(m_vb.get(), &VideoBuffer::updateFPS, this, &Decoder::updateFPS);
     }
 }
@@ -31,10 +30,6 @@ Decoder::~Decoder() {
     close();
     quit();
     wait();
-    
-    if (m_vb) {
-        m_vb->deInit();
-    }
 }
 
 void Decoder::run() {
@@ -86,7 +81,11 @@ void Decoder::close()
 
 void Decoder::onDecodeFrame(AVPacket *packet)
 {
-    std::unique_ptr<AVPacket, decltype(&av_packet_free)> packetGuard(packet, av_packet_free);
+    auto packetDeleter = [](AVPacket* p) { 
+        if (p) av_packet_free(&p); 
+    };
+
+    std::unique_ptr<AVPacket, decltype(packetDeleter)> packetGuard(packet, packetDeleter);
 
     if (!m_codecCtx || !m_isCodecCtxOpen) {
         return;
