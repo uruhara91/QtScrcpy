@@ -17,7 +17,9 @@ IDeviceManage& IDeviceManage::getInstance() {
 }
 
 DeviceManage::DeviceManage() {
-    Demuxer::init();
+    if (!Demuxer::init()) {
+        qCritical("Demuxer init failed!");
+    }
 }
 
 DeviceManage::~DeviceManage() {
@@ -44,23 +46,11 @@ bool DeviceManage::connectDevice(qsc::DeviceParams params)
         qInfo("over the maximum number of connections");
         return false;
     }
-    /*
-    // 没有必要分配端口，都用27183即可，连接建立以后server会释放监听的
-    quint16 port = 0;
-    if (params.useReverse) {
-         port = getFreePort();
-        if (0 == port) {
-            qInfo("no port available, automatically switch to forward");
-            params.useReverse = false;
-        } else {
-            params.localPort = port;
-            qInfo("free port %d", port);
-        }
-    }
-    */
+    
     IDevice *device = new Device(params);
     connect(device, &Device::deviceConnected, this, &DeviceManage::onDeviceConnected);
     connect(device, &Device::deviceDisconnected, this, &DeviceManage::onDeviceDisconnected);
+    
     if (!device->connectDevice()) {
         delete device;
         return false;
@@ -74,8 +64,8 @@ bool DeviceManage::disconnectDevice(const QString &serial)
     bool ret = false;
     if (!serial.isEmpty() && m_devices.contains(serial)) {
         auto it = m_devices.find(serial);
-        if (it->data()) {
-            delete it->data();
+        if (!it.value().isNull()) {
+            delete it.value().data();
             ret = true;
         }
     }
@@ -87,8 +77,8 @@ void DeviceManage::disconnectAllDevice()
     QMapIterator<QString, QPointer<IDevice>> i(m_devices);
     while (i.hasNext()) {
         i.next();
-        if (i.value()) {
-            delete i.value();
+        if (!i.value().isNull()) {
+            delete i.value().data();
         }
     }
 }
@@ -116,7 +106,7 @@ quint16 DeviceManage::getFreePort()
         while (i.hasNext()) {
             i.next();
             auto device = i.value();
-            if (device && device->isReversePort(port)) {
+            if (!device.isNull() && device->isReversePort(port)) {
                 used = true;
                 break;
             }
@@ -132,7 +122,9 @@ quint16 DeviceManage::getFreePort()
 void DeviceManage::removeDevice(const QString &serial)
 {
     if (!serial.isEmpty() && m_devices.contains(serial)) {
-        m_devices[serial]->deleteLater();
+        if (!m_devices[serial].isNull()) {
+            m_devices[serial]->deleteLater();
+        }
         m_devices.remove(serial);
     }
 }
