@@ -4,71 +4,67 @@
 #include <QOpenGLWidget>
 #include <QOpenGLFunctions_4_5_Core>
 #include <QOpenGLShaderProgram>
-#include <span>
-#include <array>
-#include <atomic>
+#include <QOpenGLBuffer>
+#include <QOpenGLVertexArrayObject>
 #include <mutex>
+#include <atomic>
+#include <array>
+#include <span>
 
-class QYuvOpenGLWidget : public QOpenGLWidget, protected QOpenGLFunctions_4_5_Core
-{
+class QYuvOpenGLWidget : public QOpenGLWidget, protected QOpenGLFunctions_4_5_Core {
     Q_OBJECT
 public:
     explicit QYuvOpenGLWidget(QWidget *parent = nullptr);
-    virtual ~QYuvOpenGLWidget() override;
+    ~QYuvOpenGLWidget();
 
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
-
-    void setFrameData(int width, int height, 
-                      std::span<const uint8_t> dataY, 
-                      std::span<const uint8_t> dataU, 
-                      std::span<const uint8_t> dataV, 
-                      int linesizeY, int linesizeU, int linesizeV);
-    
     const QSize &frameSize();
 
-signals:
-    void requestUpdateTextures(int width, int height, int strideY, int strideU, int strideV);
+    // Data dari Decoder
+    void setFrameData(int width, int height,
+                      std::span<const uint8_t> dataY,
+                      std::span<const uint8_t> dataU,
+                      std::span<const uint8_t> dataV,
+                      int linesizeY, int linesizeU, int linesizeV);
 
 protected:
     void initializeGL() override;
+    void resizeGL(int w, int h) override;
     void paintGL() override;
-    void resizeGL(int width, int height) override;
+
+signals:
+    void requestUpdateTextures(int w, int h, int strideY, int strideU, int strideV);
 
 private:
     void initShader();
     void initTextures(int width, int height);
-    void deInitTextures();
-    
     void initPBOs(int height, int strideY, int strideU, int strideV);
+    void deInitTextures();
     void deInitPBOs();
-    
-    void setFrameSize(const QSize &frameSize);
 
 private:
-    QSize m_frameSize = { -1, -1 };
-
+    // OpenGL Resources
     GLuint m_vao = 0;
     GLuint m_vbo = 0;
     QOpenGLShaderProgram m_program;
+    std::array<GLuint, 3> m_textures = {0, 0, 0};
 
-    std::array<GLuint, 3> m_textures = {0, 0, 0}; 
-    
-    std::array<std::array<GLuint, 3>, 2> m_pbos = {{ {0,0,0}, {0,0,0} }};
-    std::array<std::array<void*, 3>, 2> m_pboMappedPtrs = {{ {nullptr}, {nullptr} }};
+    // Double Buffer PBO
+    std::array<std::array<GLuint, 3>, 2> m_pbos;
+    std::array<std::array<void*, 3>, 2> m_pboMappedPtrs;
     std::array<int, 3> m_pboStrides = {0, 0, 0};
-    
-    bool m_pboSizeValid = false;
-    bool m_isInitialized = false;
 
-    std::atomic<int> m_pboIndex = 0;
-    std::atomic<bool> m_textureSizeMismatch = false;
-    
+    // Synchronization
+    std::atomic<int> m_pboIndex = 0; // 0 atau 1
     std::atomic_flag m_updatePending = ATOMIC_FLAG_INIT;
-
     std::mutex m_pboLock;
 
-    std::array<GLsync, 2> m_fences = {nullptr, nullptr};
+    // State
+    QSize m_frameSize;
+    bool m_isInitialized = false;
+    bool m_pboSizeValid = false;
+    bool m_textureSizeMismatch = false;
 };
 
 #endif // QYUVOPENGLWIDGET_H
