@@ -135,7 +135,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     if (!m_pboSizeValid) return;
 
     for (int i = 0; i < PBO_COUNT; ++i) {
-        int expected = STATE_FREE;
+        // int expected = STATE_FREE;
         
         if (m_frames[i].state.load(std::memory_order_acquire) == STATE_FREE) {
             targetFrame = &m_frames[i];
