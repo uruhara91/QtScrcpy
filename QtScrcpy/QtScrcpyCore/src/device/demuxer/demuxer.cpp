@@ -93,7 +93,8 @@ void Demuxer::stopDecode()
 {
     m_isInterrupted = true;
     if (m_videoSocket) {
-        m_videoSocket->close();
+        m_videoSocket->quitNotify();
+        // close() bisa dipanggil setelah thread join atau biarin dihandle vsocket
     }
     wait();
 }
