@@ -1,9 +1,8 @@
 #include "qyuvopenglwidget.h"
-#include <QDebug>
-#include <QElapsedTimer>
-#include <QThread>
+#include <QSurfaceFormat>
+#include <cstring>
 
-// Shader Vertex & Fragment
+// Shader Vertex
 static const char *vertShader = R"(#version 450 core
 layout(location = 0) in vec3 vertexIn;
 layout(location = 1) in vec2 textureIn;
@@ -14,20 +13,30 @@ void main(void) {
 }
 )";
 
+// Shader Fragment
 static const char *fragShader = R"(#version 450 core
 in vec2 textureOut;
 out vec4 FragColor;
+
 layout(binding = 0) uniform sampler2D tex_y;
 layout(binding = 1) uniform sampler2D tex_u;
 layout(binding = 2) uniform sampler2D tex_v;
-const mat3 yuv2rgb = mat3(1.164, 1.164, 1.164, 0.0, -0.213, 2.112, 1.793, -0.533, 0.0);
-const vec3 rgbOffset = vec3(0.9729, -0.30148, 1.1334);
+
+const vec3 offset = vec3(16.0/255.0, 128.0/255.0, 128.0/255.0);
+const mat3 yuv2rgb = mat3(
+    1.164,  1.164,  1.164,
+    0.0,   -0.391,  2.018,
+    1.596, -0.813,  0.0
+);
+
 void main(void) {
     vec3 yuv;
     yuv.x = texture(tex_y, textureOut).r;
     yuv.y = texture(tex_u, textureOut).r;
     yuv.z = texture(tex_v, textureOut).r;
-    FragColor = vec4(yuv2rgb * yuv - rgbOffset, 1.0);
+
+    yuv -= offset;
+    FragColor = vec4(yuv2rgb * yuv, 1.0);
 }
 )";
 
@@ -35,221 +44,266 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
     QSurfaceFormat format;
     format.setVersion(4, 5);
     format.setProfile(QSurfaceFormat::CoreProfile);
-    format.setSwapInterval(0); 
-    setFormat(format);
+    format.setSwapInterval(0);
+    format.setRedBufferSize(8);
+    format.setGreenBufferSize(8);
+    format.setBlueBufferSize(8);
+    format.setAlphaBufferSize(0);
+    format.setDepthBufferSize(0);
+    format.setStencilBufferSize(0);
     
-    connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, [this](int w, int h, int sY, int sU, int sV){
+    setFormat(format);
+    setAttribute(Qt::WA_OpaquePaintEvent);
+    setAttribute(Qt::WA_NoSystemBackground);
+    setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
+
+    connect(this, &QYuvOpenGLWidget::requestUpdateTextures, this, 
+        [this](int w, int h, int strideY, int strideU, int strideV){
         if (isValid()) {
             makeCurrent();
-            initPBOs(h, sY, sU, sV);
-            
-            if (m_textures[0] != 0) glDeleteTextures(3, m_textures.data());
-            glCreateTextures(GL_TEXTURE_2D, 3, m_textures.data());
-            
-            int widths[3] = {w, w/2, w/2};
-            int heights[3] = {h, h/2, h/2};
-            
-            for(int i=0; i<3; i++) {
-                glTextureParameteri(m_textures[i], GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTextureParameteri(m_textures[i], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                glTextureStorage2D(m_textures[i], 1, GL_R8, widths[i], heights[i]);
-            }
-
             setFrameSize(QSize(w, h));
-            m_needInit = false; 
+            initPBOs(h, strideY, strideU, strideV); 
+            initTextures(w, h);
+            m_textureSizeMismatch = false;
+            doneCurrent();
             update();
+        } else {
+            m_textureSizeMismatch = false; 
         }
     }, Qt::QueuedConnection);
 }
 
 QYuvOpenGLWidget::~QYuvOpenGLWidget() {
-    makeCurrent();
-    freePBOs();
-    if (m_vao) glDeleteVertexArrays(1, &m_vao);
-    if (m_vbo) glDeleteBuffers(1, &m_vbo);
-    if (m_textures[0]) glDeleteTextures(3, m_textures.data());
-    doneCurrent();
+    if (isValid()) {
+        makeCurrent();
+        deInitTextures();
+        deInitPBOs();
+        if (m_vao) glDeleteVertexArrays(1, &m_vao);
+        if (m_vbo) glDeleteBuffers(1, &m_vbo);
+        doneCurrent();
+    }
 }
 
-QSize QYuvOpenGLWidget::minimumSizeHint() const { return QSize(50, 50); }
-QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize; }
-const QSize &QYuvOpenGLWidget::frameSize() { return m_frameSize; }
+QSize QYuvOpenGLWidget::minimumSizeHint() const { return QSize(640, 360); }
+QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize.isValid() ? m_frameSize : QSize(1280, 720); }
+
 void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
     if (m_frameSize != frameSize) {
         m_frameSize = frameSize;
         updateGeometry();
-    }
-}
-
-void QYuvOpenGLWidget::initPBOs(int height, int sY, int sU, int sV) {
-    std::lock_guard<std::mutex> lock(m_initMutex);
-    freePBOs();
-
-    m_strides[0] = sY; m_strides[1] = sU; m_strides[2] = sV;
-    int dataSizes[3] = { sY * height, sU * ((height+1)/2), sV * ((height+1)/2) };
-    
-    GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
-
-    for(int i=0; i<PBO_COUNT; i++) {
-        glCreateBuffers(3, m_pbos[i].data());
-        for(int plane=0; plane<3; plane++) {
-            glNamedBufferStorage(m_pbos[i][plane], dataSizes[plane], nullptr, flags);
-            m_pboMapped[i][plane] = glMapNamedBufferRange(m_pbos[i][plane], 0, dataSizes[plane], flags);
-        }
-    }
-    m_pboReady = true;
-    m_renderIndex = 0;
-    m_readyIndex = -1;
-    qInfo() << "[QYUV] PBO Mailbox Initialized (3 Buffers).";
-}
-
-void QYuvOpenGLWidget::freePBOs() {
-    m_pboReady = false;
-    for(int i=0; i<PBO_COUNT; i++) {
-        for(int plane=0; plane<3; plane++) {
-            if(m_pbos[i][plane]) {
-                glUnmapNamedBuffer(m_pbos[i][plane]);
-                glDeleteBuffers(1, &m_pbos[i][plane]);
-                m_pbos[i][plane] = 0;
-                m_pboMapped[i][plane] = nullptr;
-            }
-        }
+        m_pboSizeValid = false;
     }
 }
 
 void QYuvOpenGLWidget::setFrameData(int width, int height, 
-                                   std::span<const uint8_t> dataY,
-                                   std::span<const uint8_t> dataU,
-                                   std::span<const uint8_t> dataV,
-                                   int linesizeY, int linesizeU, int linesizeV) 
+                                   std::span<const uint8_t> dataY, 
+                                   std::span<const uint8_t> dataU, 
+                                   std::span<const uint8_t> dataV, 
+                                   int linesizeY, int linesizeU, int linesizeV)
 {
-    if (width != m_frameSize.width() || height != m_frameSize.height() || 
-        linesizeY != m_strides[0] || m_needInit) {
-        if (!m_needInit) {
-            m_needInit = true;
+    bool sizeChanged = (width != m_frameSize.width() || height != m_frameSize.height());
+
+    if (sizeChanged || 
+        linesizeY != m_pboStrides[0] || 
+        linesizeU != m_pboStrides[1] || 
+        linesizeV != m_pboStrides[2] || 
+        !m_pboSizeValid) [[unlikely]] 
+    {
+        if (!m_textureSizeMismatch.exchange(true)) {
             emit requestUpdateTextures(width, height, linesizeY, linesizeU, linesizeV);
         }
         return;
     }
 
-    if (!m_pboReady) return;
+    if (m_textureSizeMismatch) return;
 
-    static QElapsedTimer stallTimer;
-    if (!stallTimer.isValid()) stallTimer.start();
-    qint64 delta = stallTimer.restart();
-    if (delta > 35) {
-        qWarning() << "[Decoder] Inter-frame gap:" << delta << "ms";
-    }
-
-    int currentRender = m_renderIndex.load(std::memory_order_acquire);
-    int currentReady = m_readyIndex.load(std::memory_order_acquire);
-    int writeTarget = -1;
-
-    for (int i = 0; i < PBO_COUNT; i++) {
-        if (i != currentRender && i != currentReady) {
-            writeTarget = i;
-            break;
-        }
-    }
-
-    if (writeTarget == -1) {
-        writeTarget = (currentRender + 1) % PBO_COUNT;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(m_initMutex); 
-        if (!m_pboReady) return;
-
-        const uint8_t* srcs[3] = {dataY.data(), dataU.data(), dataV.data()};
-        int h_plane[3] = {height, (height+1)/2, (height+1)/2};
-        
-        for(int i=0; i<3; i++) {
-            if (m_pboMapped[writeTarget][i]) {
-                memcpy(m_pboMapped[writeTarget][i], srcs[i], m_strides[i] * h_plane[i]);
-            }
-        }
-    }
+    int nextWriteIndex = (m_writeIndex.load(std::memory_order_relaxed) + 1) % PBO_COUNT;
     
-    m_readyIndex.store(writeTarget, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(m_pboLock);
+        if (!m_pboSizeValid) return;
 
-    QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
+        const int heights[3] = { height, (height + 1) / 2, (height + 1) / 2 };
+        const std::span<const uint8_t> srcData[3] = { dataY, dataU, dataV };
+
+        for (int i = 0; i < 3; i++) {
+            auto dstPtr = m_pboMappedPtrs[nextWriteIndex][i];
+            std::memcpy(dstPtr, srcData[i].data(), static_cast<size_t>(m_pboStrides[i]) * heights[i]);
+        }
+    }
+
+    m_writeIndex.store(nextWriteIndex, std::memory_order_release);
+
+    if (!m_updatePending.test_and_set(std::memory_order_acq_rel)) {
+        QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
+    }
 }
 
 void QYuvOpenGLWidget::initializeGL() {
-    initializeOpenGLFunctions();
-    
-    static const float coords[] = { 
-        -1.0f, -1.0f, 0.0f, 0.0f, 1.0f,
-         1.0f, -1.0f, 0.0f, 1.0f, 1.0f,
-        -1.0f,  1.0f, 0.0f, 0.0f, 0.0f,
-         1.0f,  1.0f, 0.0f, 1.0f, 0.0f 
+    if (!initializeOpenGLFunctions()) {
+        qWarning() << "Failed to initialize OpenGL Functions";
+        return;
+    }
+
+    m_isInitialized = true;
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_DITHER);
+
+    initShader();
+
+    static const float coordinate[] = {
+        -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
+         1.0f, -1.0f, 0.0f,   1.0f, 1.0f,
+        -1.0f,  1.0f, 0.0f,   0.0f, 0.0f,
+         1.0f,  1.0f, 0.0f,   1.0f, 0.0f
     };
     
     glCreateVertexArrays(1, &m_vao);
     glCreateBuffers(1, &m_vbo);
-    glNamedBufferStorage(m_vbo, sizeof(coords), coords, 0);
-    
+    glNamedBufferStorage(m_vbo, sizeof(coordinate), coordinate, 0);
+
     glVertexArrayVertexBuffer(m_vao, 0, m_vbo, 0, 5 * sizeof(float));
+
     glEnableVertexArrayAttrib(m_vao, 0);
     glVertexArrayAttribFormat(m_vao, 0, 3, GL_FLOAT, GL_FALSE, 0);
     glVertexArrayAttribBinding(m_vao, 0, 0);
+
     glEnableVertexArrayAttrib(m_vao, 1);
     glVertexArrayAttribFormat(m_vao, 1, 2, GL_FLOAT, GL_FALSE, 3 * sizeof(float));
     glVertexArrayAttribBinding(m_vao, 1, 0);
 
-    m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader);
-    m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShader);
-    m_program.link();
-    
-    m_program.bind();
-    m_program.setUniformValue("tex_y", 0);
-    m_program.setUniformValue("tex_u", 1);
-    m_program.setUniformValue("tex_v", 2);
-    m_program.release();
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
-void QYuvOpenGLWidget::resizeGL(int w, int h) {
-    glViewport(0, 0, w, h);
+void QYuvOpenGLWidget::initShader() {
+    if (!m_program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertShader))
+        qWarning() << "Vertex shader compile error";
+    if (!m_program.addShaderFromSourceCode(QOpenGLShader::Fragment, fragShader))
+        qWarning() << "Fragment shader compile error";
+        
+    m_program.link();
+    
+    GLuint progId = m_program.programId();
+    glProgramUniform1i(progId, glGetUniformLocation(progId, "tex_y"), 0);
+    glProgramUniform1i(progId, glGetUniformLocation(progId, "tex_u"), 1);
+    glProgramUniform1i(progId, glGetUniformLocation(progId, "tex_v"), 2);
+}
+
+void QYuvOpenGLWidget::initTextures(int width, int height) {
+    if (!m_isInitialized) return;
+
+    if (m_textures[0] != 0) {
+        glDeleteTextures(3, m_textures.data());
+    }
+
+    glCreateTextures(GL_TEXTURE_2D, 3, m_textures.data());
+
+    int widths[3] = {width, width / 2, width / 2};
+    int heights[3] = {height, height / 2, height / 2};
+
+    for (int i = 0; i < 3; i++) {
+        glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        
+        glTextureParameteri(m_textures[i], GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTextureParameteri(m_textures[i], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        
+        glTextureStorage2D(m_textures[i], 1, GL_R8, widths[i], heights[i]);
+    }
+}
+
+void QYuvOpenGLWidget::initPBOs(int height, int strideY, int strideU, int strideV) {
+    deInitPBOs();
+    std::lock_guard<std::mutex> lock(m_pboLock);
+
+    m_pboStrides = {strideY, strideU, strideV};
+
+    std::array<int, 3> sizes = {
+        strideY * height,           
+        strideU * ((height + 1) / 2),
+        strideV * ((height + 1) / 2)
+    };
+
+    GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+
+    for (int set = 0; set < PBO_COUNT; set++) {
+        glCreateBuffers(3, m_pbos[set].data());
+
+        for (int plane = 0; plane < 3; plane++) {
+            glNamedBufferStorage(m_pbos[set][plane], sizes[plane], nullptr, flags);
+            m_pboMappedPtrs[set][plane] = static_cast<std::byte*>(
+                glMapNamedBufferRange(m_pbos[set][plane], 0, sizes[plane], flags)
+            );
+        }
+    }
+    m_pboSizeValid = true;
+    
+    m_writeIndex = 0;
+    m_readIndex = 0;
+}
+
+void QYuvOpenGLWidget::deInitPBOs() {
+    if (!m_isInitialized) return;
+    std::lock_guard<std::mutex> lock(m_pboLock);
+    m_pboSizeValid = false;
+
+    for (int set = 0; set < PBO_COUNT; set++) {
+        for (int plane = 0; plane < 3; plane++) {
+            if (m_pbos[set][plane] != 0) {
+                glUnmapNamedBuffer(m_pbos[set][plane]);
+                glDeleteBuffers(1, &m_pbos[set][plane]);
+                m_pbos[set][plane] = 0;
+                m_pboMappedPtrs[set][plane] = nullptr;
+            }
+        }
+    }
+}
+
+void QYuvOpenGLWidget::deInitTextures() {
+    if (!m_isInitialized) return;
+    if (m_textures[0] != 0) {
+        glDeleteTextures(3, m_textures.data());
+        m_textures.fill(0);
+    }
+}
+
+void QYuvOpenGLWidget::resizeGL(int width, int height) {
+    glViewport(0, 0, width, height);
 }
 
 void QYuvOpenGLWidget::paintGL() {
-    if (!m_pboReady) {
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        return;
-    }
+    m_updatePending.clear(std::memory_order_release);
+    
+    if (!m_pboSizeValid) return;
 
-    int freshFrame = m_readyIndex.exchange(-1, std::memory_order_acq_rel);
+    int currentWriteIndex = m_writeIndex.load(std::memory_order_acquire);
+    
+    m_readIndex.store(currentWriteIndex, std::memory_order_relaxed);
 
-    if (freshFrame != -1) {
-        m_renderIndex.store(freshFrame, std::memory_order_release);
-    }
-
-    int drawIdx = m_renderIndex.load(std::memory_order_acquire);
+    int drawIndex = currentWriteIndex;
 
     m_program.bind();
     glBindVertexArray(m_vao);
 
-    int w = m_frameSize.width();
-    int h = m_frameSize.height();
-    int widths[3] = {w, w/2, w/2};
-    int heights[3] = {h, h/2, h/2};
-
-    for(int i=0; i<3; i++) {
-        glActiveTexture(GL_TEXTURE0 + i);
-        glBindTexture(GL_TEXTURE_2D, m_textures[i]);
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIdx][i]);
+    for (int i = 0; i < 3; i++) {
+        glBindTextureUnit(i, m_textures[i]);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, m_pboStrides[i]); 
         
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, m_strides[i]);
-        glTextureSubImage2D(m_textures[i], 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        int w = (i == 0) ? m_frameSize.width() : m_frameSize.width() / 2;
+        int h = (i == 0) ? m_frameSize.height() : m_frameSize.height() / 2;
+        
+        glTextureSubImage2D(m_textures[i], 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, nullptr);
     }
     
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
     glBindVertexArray(0);
     m_program.release();
 }
