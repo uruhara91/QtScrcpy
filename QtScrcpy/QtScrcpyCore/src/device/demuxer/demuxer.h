@@ -20,13 +20,13 @@ public:
     explicit Demuxer(QObject *parent = nullptr);
     virtual ~Demuxer() override;
 
-    static bool init();
+    [[nodiscard]] static bool init();
     static void deInit();
 
     void installVideoSocket(VideoSocket* videoSocket);
     void setFrameSize(const QSize &frameSize);
     
-    bool startDecode();
+    [[nodiscard]] bool startDecode();
     void stopDecode();
 
 signals:

@@ -87,14 +87,15 @@ void *Device::getUserData()
     return m_userData;
 }
 
-void Device::registerDeviceObserver(DeviceObserver *observer)
-{
-    m_deviceObservers.insert(observer);
+void Device::registerDeviceObserver(DeviceObserver* observer) {
+    if (!observer) return;
+    if (std::ranges::find(m_deviceObservers, observer) == m_deviceObservers.end()) {
+        m_deviceObservers.push_back(observer);
+    }
 }
 
-void Device::deRegisterDeviceObserver(DeviceObserver *observer)
-{
-    m_deviceObservers.erase(observer);
+void Device::deRegisterDeviceObserver(DeviceObserver* observer) {
+    std::erase(m_deviceObservers, observer); 
 }
 
 const QString &Device::getSerial()
@@ -332,21 +333,21 @@ bool Device::connectDevice()
 
 void Device::disconnectDevice()
 {
-    if (!m_server) {
-        return;
+    if (m_server) {
+        m_server->stop();
+        m_server.reset();
     }
-    m_server->stop();
-    m_server = Q_NULLPTR;
 
     if (m_stream) {
         m_stream->stopDecode();
         m_stream->quit();
         m_stream->wait();
+        m_stream.reset();
     }
 
     if (m_decoder) {
         m_decoder->close();
-        m_decoder->deleteLater(); 
+        m_decoder.reset();
     }
 
     if (m_recorder) {
@@ -354,7 +355,7 @@ void Device::disconnectDevice()
             m_recorder->stopRecorder();
             m_recorder->wait();
         }
-        m_recorder->close();
+        m_recorder.reset();
     }
 
     if (m_serverStartSuccess) {

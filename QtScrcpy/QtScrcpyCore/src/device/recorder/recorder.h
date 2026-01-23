@@ -30,12 +30,12 @@ public:
     void setFrameSize(const QSize &declaredFrameSize);
     void setFormat(Recorder::RecorderFormat format);
     
-    bool open();
+    [[nodiscard]] bool open();
     void close();
-    bool startRecorder();
+    [[nodiscard]] bool startRecorder();
     void stopRecorder();
-    
-    bool push(AVPacket *packet);
+
+    [[nodiscard]] bool push(AVPacket *packet);
 
 private:
     const AVOutputFormat *findMuxer(const char *name);

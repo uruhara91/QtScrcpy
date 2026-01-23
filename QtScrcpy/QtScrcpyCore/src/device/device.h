@@ -6,6 +6,7 @@
 #include <QPointer>
 #include <QTime>
 #include <span>
+#include <memory>
 
 #include "QtScrcpyCore.h"
 #include "decoder/decoder.h"
@@ -82,19 +83,19 @@ private:
     bool saveFrame(int width, int height, uint8_t* dataRGB32);
 
 private:
-    QPointer<Server> m_server;
     bool m_serverStartSuccess = false;
     
-    QPointer<Decoder> m_decoder;
-    QPointer<Controller> m_controller;
-    QPointer<FileHandler> m_fileHandler;
-    QPointer<Demuxer> m_stream;
-    QPointer<Recorder> m_recorder;
+    std::unique_ptr<Server> m_server;
+    std::unique_ptr<Decoder> m_decoder;
+    std::unique_ptr<Controller> m_controller;
+    std::unique_ptr<FileHandler> m_fileHandler;
+    std::unique_ptr<Demuxer> m_stream;
+    std::unique_ptr<Recorder> m_recorder;
 
     QElapsedTimer m_startTimeCount;
     DeviceParams m_params;
     
-    std::set<DeviceObserver*> m_deviceObservers;
+    std::vector<DeviceObserver*> m_deviceObservers;
     void *m_userData = nullptr;
 };
 

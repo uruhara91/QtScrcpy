@@ -33,7 +33,7 @@ public:
     explicit Decoder(FrameCallback onFrame, QObject *parent = nullptr);
     virtual ~Decoder() override;
 
-    bool open();
+    [[nodiscard]] bool open();
     void close();
 
     void peekFrame(std::function<void(int width, int height, uint8_t* dataRGB32)> onFrame);
