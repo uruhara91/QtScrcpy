@@ -1,10 +1,14 @@
-#include <QDebug>
-#include <QThread>
-#include "compat.h"
 #include "decoder.h"
 #include "videobuffer.h"
+#include "compat.h"
+
+#include <QDebug>
+#include <QThread>
+
+extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/imgutils.h>
+}
 
 void AVCodecContextDeleter::operator()(AVCodecContext* ctx) const {
     if (ctx) {
@@ -12,67 +16,88 @@ void AVCodecContextDeleter::operator()(AVCodecContext* ctx) const {
     }
 }
 
-Decoder::Decoder(std::function<void(int, int, std::span<const uint8_t>, std::span<const uint8_t>, std::span<const uint8_t>, int, int, int)> onFrame, QObject *parent)
-    : QObject(parent)
-    , m_vb(new VideoBuffer())
-    , m_onFrame(onFrame)
+Decoder::Decoder(FrameCallback onFrame, QObject *parent)
+    : QThread(parent)
+    , m_vb(std::make_unique<VideoBuffer>())
+    , m_onFrame(std::move(onFrame))
 {
-    m_vb->init();
-    connect(this, &Decoder::newFrame, this, &Decoder::onNewFrame, Qt::DirectConnection);
-    connect(m_vb, &VideoBuffer::updateFPS, this, &Decoder::updateFPS);
+    if (m_vb) {
+        m_vb->init();
+        connect(m_vb.get(), &VideoBuffer::updateFPS, this, &Decoder::updateFPS);
+    }
 }
 
 Decoder::~Decoder() {
     close();
+    quit();
+    wait();
+    
     if (m_vb) {
         m_vb->deInit();
-        delete m_vb;
-        m_vb = Q_NULLPTR;
     }
+}
+
+void Decoder::run() {
+    exec();
 }
 
 bool Decoder::open()
 {
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-    if (!codec) return false;
+    if (!codec) {
+        qCritical("Decoder: H.264 decoder not found");
+        return false;
+    }
 
     m_codecCtx = std::unique_ptr<AVCodecContext, AVCodecContextDeleter>(avcodec_alloc_context3(codec));
-    
-    if (!m_codecCtx) return false;
+    if (!m_codecCtx) {
+        qCritical("Decoder: Could not allocate codec context");
+        return false;
+    }
 
     m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
     m_codecCtx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
     m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
-    m_codecCtx->skip_loop_filter = AVDISCARD_NONREF;
     m_codecCtx->thread_type = FF_THREAD_SLICE;
     m_codecCtx->thread_count = qMax(1, QThread::idealThreadCount() - 1);
+    m_codecCtx->skip_loop_filter = AVDISCARD_NONREF;
 
-    if (avcodec_open2(m_codecCtx.get(), codec, NULL) < 0) { // .get()
-        qCritical("Could not open H.264 codec");
+    if (avcodec_open2(m_codecCtx.get(), codec, nullptr) < 0) {
+        qCritical("Decoder: Could not open H.264 codec");
         return false;
     }
     
     m_isCodecCtxOpen = true;
-    qInfo("SW Decoder initialized. Threads: %d, Type: Slice", m_codecCtx->thread_count);
+    qInfo("SW Decoder initialized. Threads: %d", m_codecCtx->thread_count);
+    
+    start();
+    
     return true;
 }
 
 void Decoder::close()
 {
+    quit();
+    wait();
+
     m_codecCtx.reset();
     m_isCodecCtxOpen = false;
 }
 
-bool Decoder::push(const AVPacket *packet)
+void Decoder::onDecodeFrame(AVPacket *packet)
 {
+    std::unique_ptr<AVPacket, decltype(&av_packet_free)> packetGuard(packet, av_packet_free);
+
     if (!m_codecCtx || !m_isCodecCtxOpen) {
-        return false;
+        return;
     }
     
     int ret = avcodec_send_packet(m_codecCtx.get(), packet);
     if (ret < 0) {
-        qCritical("Could not send video packet: %d", ret);
-        return false;
+        if (ret != AVERROR(EAGAIN)) {
+            qWarning("Decoder: Send packet error: %d", ret);
+        }
+        return;
     }
 
     while (true) {
@@ -80,43 +105,25 @@ bool Decoder::push(const AVPacket *packet)
         
         ret = avcodec_receive_frame(m_codecCtx.get(), decodingFrame);
         if (ret == 0) {
-            pushFrame();
+            pushFrameToBuffer();
         } else if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+            // Butuh input lagi atau EOF
             break;
         } else {
-            qWarning("Decoder receive error: %d", ret);
-            return false;
+            qWarning("Decoder: Receive frame error: %d", ret);
+            return;
         }
     }
-    
-    return true;
 }
 
-void Decoder::peekFrame(std::function<void (int, int, uint8_t *)> onFrame)
-{
-    if (!m_vb) {
-        return;
-    }
-    m_vb->peekRenderedFrame(onFrame);
-}
-
-void Decoder::pushFrame()
-{
-    if (!m_vb) {
-        return;
-    }
-    bool previousFrameSkipped = true;
-    m_vb->offerDecodedFrame(previousFrameSkipped);
-    if (previousFrameSkipped) {
-        return;
-    }
-    emit newFrame();
-}
-
-void Decoder::onNewFrame()
+void Decoder::pushFrameToBuffer()
 {
     if (!m_vb) return;
 
+    bool previousFrameSkipped = true;
+    
+    m_vb->offerDecodedFrame(previousFrameSkipped);
+    
     const AVFrame *frame = m_vb->consumeRenderedFrame();
     
     if (m_onFrame && frame) {
@@ -128,4 +135,15 @@ void Decoder::onNewFrame()
                    spanY, spanU, spanV,
                    frame->linesize[0], frame->linesize[1], frame->linesize[2]);
     }
+    
+    emit newFrame();
+}
+
+void Decoder::peekFrame(std::function<void (int, int, uint8_t *)> onFrame)
+{
+    if (!m_vb) {
+        return;
+    }
+    
+    m_vb->peekRenderedFrame(onFrame);
 }
