@@ -7,9 +7,10 @@
 #include <QTime>
 #include <span>
 
-#include "../../include/QtScrcpyCore.h"
+#include "QtScrcpyCore.h"
 #include "decoder/decoder.h"
 
+// Forward declarations
 class QMouseEvent;
 class QWheelEvent;
 class QKeyEvent;
@@ -21,6 +22,7 @@ class Demuxer;
 class VideoForm;
 class Controller;
 struct AVFrame;
+struct AVPacket;
 
 namespace qsc {
 
@@ -42,7 +44,6 @@ public:
     bool connectDevice() override;
     void disconnectDevice() override;
 
-    // key map
     void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize) override;
     void wheelEvent(const QWheelEvent *from, const QSize &frameSize, const QSize &showSize) override;
     void keyEvent(const QKeyEvent *from, const QSize &frameSize, const QSize &showSize) override;
@@ -81,10 +82,10 @@ private:
     bool saveFrame(int width, int height, uint8_t* dataRGB32);
 
 private:
-    // server relevant
     QPointer<Server> m_server;
     bool m_serverStartSuccess = false;
-    QPointer<Decoder> m_decoder; 
+    
+    QPointer<Decoder> m_decoder;
     QPointer<Controller> m_controller;
     QPointer<FileHandler> m_fileHandler;
     QPointer<Demuxer> m_stream;
@@ -93,9 +94,8 @@ private:
     QElapsedTimer m_startTimeCount;
     DeviceParams m_params;
     
-    std::set<DeviceObserver*> m_deviceObservers; 
-    
-    void* m_userData = nullptr;
+    std::set<DeviceObserver*> m_deviceObservers;
+    void *m_userData = nullptr;
 };
 
 }

@@ -2,6 +2,7 @@
 #include <QMessageBox>
 #include <QTimer>
 #include <span>
+#include <QMetaObject>
 
 #include "controller.h"
 #include "devicemsg.h"
@@ -11,6 +12,10 @@
 #include "recorder.h"
 #include "server.h"
 #include "demuxer.h"
+
+extern "C" {
+#include "libavcodec/avcodec.h"
+}
 
 namespace qsc {
 
@@ -30,13 +35,13 @@ Device::Device(DeviceParams params, QObject *parent) : IDevice(parent), m_params
             for (const auto& item : m_deviceObservers) {
                 item->onFrame(width, height, dataY, dataU, dataV, linesizeY, linesizeU, linesizeV);
             }
-        }, this);
+        }, nullptr);
+
         m_fileHandler = new FileHandler(this);
         m_controller = new Controller([this](const QByteArray& buffer) -> qint64 {
             if (!m_server || !m_server->getControlSocket()) {
                 return 0;
             }
-
             return m_server->getControlSocket()->write(buffer.data(), buffer.length());
         }, params.gameScript, this);
     }
@@ -186,7 +191,6 @@ void Device::initSignals()
                     if (!m_recorder->open()) {
                         qCritical("Could not open recorder");
                     }
-
                     if (!m_recorder->startRecorder()) {
                         qCritical("Could not start recorder");
                     }
@@ -240,18 +244,39 @@ void Device::initSignals()
             disconnectDevice();
             qDebug() << "stream thread stop";
         });
+
         connect(m_stream, &Demuxer::getFrame, this, [this](AVPacket *packet) {
-            if (m_decoder && !m_decoder->push(packet)) {
-                qCritical("Could not send packet to decoder");
+            
+            if (m_recorder) {
+                AVPacket *recPacket = av_packet_clone(packet);
+                if (recPacket) {
+                    if (!m_recorder->push(recPacket)) {
+                        av_packet_free(&recPacket);
+                    }
+                }
             }
 
-            if (m_recorder && !m_recorder->push(packet)) {
-                qCritical("Could not send packet to recorder");
+            if (m_decoder) {
+                bool sent = QMetaObject::invokeMethod(m_decoder, "onDecodeFrame", 
+                                          Qt::QueuedConnection, 
+                                          Q_ARG(AVPacket*, packet));
+                if (!sent) {
+                    av_packet_free(&packet);
+                }
+            } else {
+                av_packet_free(&packet);
             }
+
         }, Qt::DirectConnection);
+
         connect(m_stream, &Demuxer::getConfigFrame, this, [this](AVPacket *packet) {
-            if (m_recorder && !m_recorder->push(packet)) {
-                qCritical("Could not send config packet to recorder");
+            if (m_recorder) {
+                if (!m_recorder->push(packet)) {
+                    av_packet_free(&packet);
+                    qCritical("Could not send config packet to recorder");
+                }
+            } else {
+                av_packet_free(&packet);
             }
         }, Qt::DirectConnection);
     }
@@ -315,11 +340,13 @@ void Device::disconnectDevice()
 
     if (m_stream) {
         m_stream->stopDecode();
+        m_stream->quit();
+        m_stream->wait();
     }
 
-    // server must stop before decoder, because decoder block main thread
     if (m_decoder) {
         m_decoder->close();
+        m_decoder->deleteLater(); 
     }
 
     if (m_recorder) {
