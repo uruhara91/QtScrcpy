@@ -34,7 +34,7 @@ public:
     explicit Device(DeviceParams params, QObject *parent = nullptr);
     virtual ~Device();
 
-    Decoder* decoder() const { return m_decoder; }
+    Decoder* decoder() const { return m_decoder.get(); }
 
     void setUserData(void* data) override;
     void* getUserData() override;

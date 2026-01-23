@@ -203,13 +203,22 @@ void Device::initSignals()
 
                 // init decoder
                 if (m_decoder) {
-                    m_decoder->open();
+                    if (!m_decoder->open()) {
+                        qCritical("Could not open decoder");
+                        m_server->stop();
+                        return;
+                    }
                 }
 
                 // init stream
                 m_stream->installVideoSocket(m_server->removeVideoSocket());
                 m_stream->setFrameSize(size);
-                m_stream->startDecode();
+                
+                if (!m_stream->startDecode()) {
+                    qCritical("Could not start demuxer");
+                    m_server->stop();
+                    return;
+                }
 
                 // recv device msg
                 connect(m_server->getControlSocket(), &QTcpSocket::readyRead, this, [this](){
