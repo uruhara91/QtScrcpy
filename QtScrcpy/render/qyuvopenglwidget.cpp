@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <bit>
 #include <concepts>
-#include <QElapsedTimer>
 
 extern "C" {
 #include <libavutil/imgutils.h>
@@ -119,70 +118,50 @@ void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
     }
 }
 
-void QYuvOpenGLWidget::setFrameData(int width, int height,
-                                   std::span<const uint8_t> dataY,
-                                   std::span<const uint8_t> dataU,
-                                   std::span<const uint8_t> dataV,
+void QYuvOpenGLWidget::setFrameData(int width, int height, 
+                                   std::span<const uint8_t> dataY, 
+                                   std::span<const uint8_t> dataU, 
+                                   std::span<const uint8_t> dataV, 
                                    int linesizeY, int linesizeU, int linesizeV)
 {
     bool sizeChanged = (width != m_frameSize.width() || height != m_frameSize.height());
-    bool strideChanged = (linesizeY != m_pboStrides[0] ||
-                          linesizeU != m_pboStrides[1] ||
+    bool strideChanged = (linesizeY != m_pboStrides[0] || 
+                          linesizeU != m_pboStrides[1] || 
                           linesizeV != m_pboStrides[2]);
 
     if (sizeChanged || strideChanged || !m_pboSizeValid) [[unlikely]] {
         if (!m_textureSizeMismatch) {
             m_textureSizeMismatch = true;
+
             emit requestUpdateTextures(width, height, linesizeY, linesizeU, linesizeV);
         }
         return;
     }
 
     if (m_textureSizeMismatch) return;
-
-    static QElapsedTimer intervalTimer;
-    static QElapsedTimer executionTimer;
-    static bool firstRun = true;
-    qint64 interval = 0;
-
-    if (firstRun) {
-        intervalTimer.start();
-        firstRun = false;
-    } else {
-        interval = intervalTimer.restart();
-    }
-    executionTimer.start();
-
+    
     int currentIndex = m_pboIndex.load(std::memory_order_acquire);
-    int writeIndex = (currentIndex + 1) % 2;
-
+    int uploadIndex = (currentIndex + 1) % 2; 
+    
     {
-        std::lock_guard<std::mutex> lock(m_pboLock);
+        std::lock_guard<std::mutex> lock(m_pboLock); 
         if (!m_pboSizeValid) return;
 
         const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
         int heights[3] = { height, (height + 1) / 2, (height + 1) / 2 };
-
+        
         for (int i = 0; i < 3; i++) {
-            if (m_pboMappedPtrs[writeIndex][i]) {
-                size_t copySize = static_cast<size_t>(m_pboStrides[i]) * heights[i];
-                memcpy(m_pboMappedPtrs[writeIndex][i], srcData[i], copySize);
-            }
+            auto dstPtr = static_cast<uint8_t*>(m_pboMappedPtrs[uploadIndex][i]);
+            size_t totalBytes = static_cast<size_t>(m_pboStrides[i]) * heights[i];
+            
+            memcpy(dstPtr, srcData[i], totalBytes);
         }
+        
+        m_pboIndex.store(uploadIndex, std::memory_order_release);
     }
-
-    m_pboIndex.store(writeIndex, std::memory_order_release);
-
+    
     if (!m_updatePending.test_and_set(std::memory_order_acq_rel)) {
         QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
-    }
-
-    // Diag
-    qint64 execTime = executionTimer.nsecsElapsed() / 1000; // microseconds
-    
-    // Warn jika interval > 34ms (drop fps) atau memcpy > 2ms (slow cpu copy)
-    if (interval > 34 || execTime > 2000) {
-        qWarning() << "[QYUV] Jitter:" << interval << "ms | Memcpy:" << (execTime/1000.0) << "ms | Idx:" << writeIndex;
     }
 }
 
@@ -273,7 +252,7 @@ void QYuvOpenGLWidget::initPBOs(int height, int strideY, int strideU, int stride
     m_pboStrides[2] = strideV;
 
     int sizes[3] = {
-        m_pboStrides[0] * height,
+        m_pboStrides[0] * height,           
         m_pboStrides[1] * ((height + 1) / 2),
         m_pboStrides[2] * ((height + 1) / 2)
     };
@@ -289,7 +268,6 @@ void QYuvOpenGLWidget::initPBOs(int height, int strideY, int strideU, int stride
         }
     }
     m_pboSizeValid = true;
-    qInfo() << "PBO Initialized. Size:" << sizes[0] + sizes[1] + sizes[2];
 }
 
 void QYuvOpenGLWidget::deInitTextures() {
@@ -325,24 +303,31 @@ void QYuvOpenGLWidget::paintGL() {
     if (!m_pboSizeValid) return;
 
     int drawIndex = m_pboIndex.load(std::memory_order_acquire);
+
     int widths[3] = {m_frameSize.width(), m_frameSize.width() / 2, m_frameSize.width() / 2};
     int heights[3] = {m_frameSize.height(), m_frameSize.height() / 2, m_frameSize.height() / 2};
 
     m_program.bind();
     glBindVertexArray(m_vao);
 
+    // DSA Texture Update
     for (int i = 0; i < 3; i++) {
         glBindTextureUnit(i, m_textures[i]);
+        
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, m_pboStrides[i]);
+        
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, m_pboStrides[i] / 1);
+        
         glTextureSubImage2D(m_textures[i], 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
     }
 
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glBindVertexArray(0);
 
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    glBindVertexArray(0);
     m_program.release();
+
     m_updatePending.clear(std::memory_order_release);
 }
