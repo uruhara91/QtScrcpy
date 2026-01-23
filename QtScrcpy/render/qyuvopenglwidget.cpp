@@ -110,6 +110,14 @@ QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize; }
 
 const QSize &QYuvOpenGLWidget::frameSize() { return m_frameSize; }
 
+void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
+    if (m_frameSize != frameSize) {
+        m_frameSize = frameSize;
+        updateGeometry();
+        m_pboSizeValid = false;
+    }
+}
+
 void QYuvOpenGLWidget::setFrameData(int width, int height, 
                                    std::span<const uint8_t> dataY, 
                                    std::span<const uint8_t> dataU, 
