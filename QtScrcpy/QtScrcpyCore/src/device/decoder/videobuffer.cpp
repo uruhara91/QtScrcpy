@@ -4,45 +4,32 @@
 
 extern "C"
 {
-#include "libavutil/frame.h"
 #include "libavutil/imgutils.h"
 }
 
 VideoBuffer::VideoBuffer(QObject *parent) : QObject(parent) {
-    connect(&m_fpsCounter, &FpsCounter::updateFPS, this, &VideoBuffer::updateFPS);
-}
-
-VideoBuffer::~VideoBuffer() {
-    deInit();
-}
-
-bool VideoBuffer::init()
-{
     m_decodingFrame = av_frame_alloc();
-    if (!m_decodingFrame) return false;
-
     m_renderingframe = av_frame_alloc();
-    if (!m_renderingframe) {
-        av_frame_free(&m_decodingFrame);
-        return false;
+    
+    if (!m_decodingFrame || !m_renderingframe) {
+        qCritical("VideoBuffer: OOM - Failed to allocate AVFrame");
     }
 
     m_renderingFrameConsumed = true;
+    
+    connect(&m_fpsCounter, &FpsCounter::updateFPS, this, &VideoBuffer::updateFPS);
     m_fpsCounter.start();
-    return true;
 }
 
-void VideoBuffer::deInit()
-{
+VideoBuffer::~VideoBuffer() {
+    m_fpsCounter.stop();
+    
     if (m_decodingFrame) {
         av_frame_free(&m_decodingFrame);
-        m_decodingFrame = nullptr;
     }
     if (m_renderingframe) {
         av_frame_free(&m_renderingframe);
-        m_renderingframe = nullptr;
     }
-    m_fpsCounter.stop();
 }
 
 void VideoBuffer::setRenderExpiredFrames(bool renderExpiredFrames)
@@ -71,12 +58,11 @@ void VideoBuffer::offerDecodedFrame(bool &previousFrameSkipped)
     swap();
 
     m_frameGen++; 
-    
     m_renderingFrameConsumed = false;
 }
 
 const AVFrame *VideoBuffer::consumeRenderedFrame()
-{    
+{
     m_renderingFrameConsumed = true;
     
     if (m_fpsCounter.isStarted()) {
@@ -89,7 +75,7 @@ const AVFrame *VideoBuffer::consumeRenderedFrame()
 void VideoBuffer::peekFrameInfo(int &width, int &height, int &format)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_renderingframe) {
+    if (m_renderingframe && m_renderingframe->width > 0) {
         width = m_renderingframe->width;
         height = m_renderingframe->height;
         format = m_renderingframe->format;
@@ -122,20 +108,20 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
     std::shared_ptr<std::vector<uint8_t>> targetBuffer;
 
     if (!cacheValid) {
-        if (m_cachedFrame && m_cachedFrame.use_count() == 1) {
-            targetBuffer = m_cachedFrame;
-        } else {
-            targetBuffer = std::make_shared<std::vector<uint8_t>>();
+        if (!m_cachedFrame) {
+            m_cachedFrame = std::make_shared<std::vector<uint8_t>>();
         }
+        targetBuffer = m_cachedFrame;
 
-        int size = av_image_get_buffer_size(AV_PIX_FMT_RGB32, width, height, 4);
+        int size = av_image_get_buffer_size(AV_PIX_FMT_RGB32, width, height, 1);
         if (targetBuffer->size() != (size_t)size) {
             targetBuffer->resize(size);
         }
 
         AVFrame *rgbFrame = av_frame_alloc();
         if (rgbFrame) {
-            av_image_fill_arrays(rgbFrame->data, rgbFrame->linesize, targetBuffer->data(), AV_PIX_FMT_RGB32, width, height, 4);
+            av_image_fill_arrays(rgbFrame->data, rgbFrame->linesize, targetBuffer->data(), 
+                                 AV_PIX_FMT_RGB32, width, height, 1);
 
             AVFrameConvert convert;
             convert.setSrcFrameInfo(width, height, (AVPixelFormat)format);
@@ -143,19 +129,15 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
             
             if (convert.init()) {
                 convert.convert(frame, rgbFrame);
-                m_cachedFrame = targetBuffer;
+                
                 m_cacheGen = m_frameGen;
                 m_cachedWidth = width;
                 m_cachedHeight = height;
                 m_cachedFormat = format;
-            } else {
-                 qWarning() << "VideoBuffer::peekRenderedFrame convert init failed";
-                 targetBuffer.reset();
-            }
+            } 
+            
             convert.deInit();
             av_frame_free(&rgbFrame);
-        } else {
-            targetBuffer.reset();
         }
     } else {
         targetBuffer = m_cachedFrame;
@@ -164,11 +146,6 @@ void VideoBuffer::peekRenderedFrame(std::function<void(int width, int height, ui
     if (targetBuffer && !targetBuffer->empty()) {
         onFrame(m_cachedWidth, m_cachedHeight, targetBuffer->data());
     }
-}
-
-void VideoBuffer::interrupt()
-{
-    m_interrupted = true;
 }
 
 void VideoBuffer::swap()
