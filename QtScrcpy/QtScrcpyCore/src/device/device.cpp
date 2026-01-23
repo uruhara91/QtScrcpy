@@ -27,7 +27,7 @@ Device::Device(DeviceParams params, QObject *parent) : IDevice(parent), m_params
     }
 
     if (params.display) {
-        m_decoder = new Decoder([this](int width, int height, 
+        m_decoder = std::make_unique<Decoder>([this](int width, int height, 
                                    std::span<const uint8_t> dataY, 
                                    std::span<const uint8_t> dataU, 
                                    std::span<const uint8_t> dataV, 
@@ -37,18 +37,17 @@ Device::Device(DeviceParams params, QObject *parent) : IDevice(parent), m_params
             }
         }, nullptr);
 
-        m_fileHandler = new FileHandler(this);
-        m_controller = new Controller([this](const QByteArray& buffer) -> qint64 {
-            if (!m_server || !m_server->getControlSocket()) {
-                return 0;
-            }
+        m_fileHandler = std::make_unique<FileHandler>(nullptr);
+        
+        m_controller = std::make_unique<Controller>([this](const QByteArray& buffer) -> qint64 {
+            if (!m_server || !m_server->getControlSocket()) return 0;
             return m_server->getControlSocket()->write(buffer.data(), buffer.length());
-        }, params.gameScript, this);
+        }, params.gameScript, nullptr);
     }
 
-    m_stream = new Demuxer(this);
+    m_stream = std::make_unique<Demuxer>(nullptr);
+    m_server = std::make_unique<Server>(nullptr);
 
-    m_server = new Server(this);
     if (m_params.recordFile && !m_params.recordPath.trimmed().isEmpty()) {
         QString absFilePath;
         QString fileDir(m_params.recordPath);
@@ -67,7 +66,7 @@ Device::Device(DeviceParams params, QObject *parent) : IDevice(parent), m_params
             }
             absFilePath = dir.absoluteFilePath(fileName);
         }
-        m_recorder = new Recorder(absFilePath, this);
+        m_recorder = std::make_unique<Recorder>(absFilePath, nullptr);
     }
     initSignals();
 }
@@ -357,6 +356,9 @@ void Device::disconnectDevice()
         }
         m_recorder.reset();
     }
+
+    m_controller.reset();
+    m_fileHandler.reset();
 
     if (m_serverStartSuccess) {
         emit deviceDisconnected(m_params.serial);

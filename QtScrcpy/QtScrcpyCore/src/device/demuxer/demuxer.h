@@ -1,5 +1,5 @@
-#ifndef DEMUXER_H
-#define DEMUXER_H
+#ifndef STREAM_H
+#define STREAM_H
 
 #include <QPointer>
 #include <QSize>
@@ -57,4 +57,4 @@ private:
     std::atomic<bool> m_isInterrupted { false };
 };
 
-#endif // DEMUXER_H
+#endif // STREAM_H

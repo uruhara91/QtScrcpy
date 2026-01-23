@@ -42,7 +42,7 @@ public:
     void registerDeviceObserver(DeviceObserver* observer) override;
     void deRegisterDeviceObserver(DeviceObserver* observer) override;
 
-    bool connectDevice() override;
+    [[nodiscard]] bool connectDevice() override;
     void disconnectDevice() override;
 
     void mouseEvent(const QMouseEvent *from, const QSize &frameSize, const QSize &showSize) override;
