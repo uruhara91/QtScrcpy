@@ -14,18 +14,19 @@ VideoSocket::~VideoSocket()
 
 qint32 VideoSocket::subThreadRecvData(quint8 *buf, qint32 bufSize)
 {
-    if (!buf) {
-        return 0;
-    }
-    // this function cant call in main thread
+    if (!buf) return 0;
+
     Q_ASSERT(QCoreApplication::instance()->thread() != QThread::currentThread());
 
     while (bytesAvailable() < bufSize) {
-        if (!waitForReadyRead(-1)) {
-            return 0;
+        if (m_quit) return -1;
+
+        if (state() != QAbstractSocket::ConnectedState) return -1;
+
+        if (!waitForReadyRead(10)) {
+            continue; 
         }
     }
 
-    // recv data
     return read((char *)buf, bufSize);
 }
