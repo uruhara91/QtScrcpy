@@ -143,8 +143,6 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     if (!m_pboSizeValid) return;
 
     for (int i = 0; i < PBO_COUNT; ++i) {
-        // int expected = STATE_FREE;
-        
         if (m_frames[i].state.load(std::memory_order_acquire) == STATE_FREE) {
             targetFrame = &m_frames[i];
             break;
@@ -152,6 +150,9 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     }
 
     if (!targetFrame) {
+        if (!m_updatePending.test_and_set(std::memory_order_acq_rel)) {
+            QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
+        }
         return; 
     }
 
