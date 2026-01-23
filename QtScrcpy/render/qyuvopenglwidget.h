@@ -45,6 +45,8 @@ private:
     
     void setFrameSize(const QSize &frameSize);
 
+    void checkFences();
+
 private:
     QSize m_frameSize = { -1, -1 };
 
@@ -54,19 +56,28 @@ private:
 
     std::array<GLuint, 3> m_textures = {0, 0, 0}; 
     
-    std::array<std::array<GLuint, 3>, 2> m_pbos = {{ {0,0,0}, {0,0,0} }};
-    std::array<std::array<void*, 3>, 2> m_pboMappedPtrs = {{ {nullptr}, {nullptr} }};
+    static constexpr int PBO_COUNT = 3;
+    
+    struct FrameBuffer {
+        std::array<GLuint, 3> pboIds = {0, 0, 0};
+        std::array<void*, 3> mappedPtrs = {nullptr};
+        GLsync fence = 0;
+        
+        std::atomic<int> state {0}; 
+    };
+
+    std::array<FrameBuffer, PBO_COUNT> m_frames;
     std::array<int, 3> m_pboStrides = {0, 0, 0};
     
     bool m_pboSizeValid = false;
     bool m_isInitialized = false;
 
-    std::atomic<int> m_pboIndex = 0;
-    std::atomic<bool> m_textureSizeMismatch = false;
+    quint64 m_renderGen = 0;
     
+    std::atomic<bool> m_textureSizeMismatch = false;
     std::atomic_flag m_updatePending = ATOMIC_FLAG_INIT;
 
-    std::mutex m_pboLock;
+    std::mutex m_initLock;
 };
 
 #endif // QYUVOPENGLWIDGET_H
