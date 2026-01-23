@@ -4,19 +4,17 @@
 #include <QOpenGLWidget>
 #include <QOpenGLFunctions_4_5_Core>
 #include <QOpenGLShaderProgram>
+#include <span>
+#include <array>
 #include <atomic>
 #include <mutex>
-#include <array>
-#include <span>
-
-constexpr int PBO_COUNT = 3; 
 
 class QYuvOpenGLWidget : public QOpenGLWidget, protected QOpenGLFunctions_4_5_Core
 {
     Q_OBJECT
 public:
     explicit QYuvOpenGLWidget(QWidget *parent = nullptr);
-    ~QYuvOpenGLWidget() override;
+    virtual ~QYuvOpenGLWidget() override;
 
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
@@ -26,6 +24,8 @@ public:
                       std::span<const uint8_t> dataU, 
                       std::span<const uint8_t> dataV, 
                       int linesizeY, int linesizeU, int linesizeV);
+    
+    const QSize &frameSize();
 
 signals:
     void requestUpdateTextures(int width, int height, int strideY, int strideU, int strideV);
@@ -43,7 +43,7 @@ private:
     void initPBOs(int height, int strideY, int strideU, int strideV);
     void deInitPBOs();
     
-    void updateTexture(int plane, int width, int height, int stride);
+    void setFrameSize(const QSize &frameSize);
 
 private:
     QSize m_frameSize = { -1, -1 };
@@ -53,17 +53,19 @@ private:
     QOpenGLShaderProgram m_program;
 
     std::array<GLuint, 3> m_textures = {0, 0, 0}; 
-    std::array<std::array<GLuint, 3>, PBO_COUNT> m_pbos = {};
-    std::array<std::array<std::byte*, 3>, PBO_COUNT> m_pboMappedPtrs = {};
+    
+    std::array<std::array<GLuint, 3>, 2> m_pbos = {{ {0,0,0}, {0,0,0} }};
+    std::array<std::array<void*, 3>, 2> m_pboMappedPtrs = {{ {nullptr}, {nullptr} }};
     std::array<int, 3> m_pboStrides = {0, 0, 0};
     
     bool m_pboSizeValid = false;
     bool m_isInitialized = false;
 
-    std::atomic<int> m_writeIndex = 0;
-    std::atomic<int> m_readIndex = 0;
+    std::atomic<int> m_pboIndex = 0;
     std::atomic<bool> m_textureSizeMismatch = false;
+    
     std::atomic_flag m_updatePending = ATOMIC_FLAG_INIT;
+
     std::mutex m_pboLock;
 };
 
