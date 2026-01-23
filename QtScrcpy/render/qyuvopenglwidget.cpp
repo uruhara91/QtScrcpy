@@ -24,6 +24,7 @@ static const char *vertShader = R"(#version 450 core
 layout(location = 0) in vec3 vertexIn;
 layout(location = 1) in vec2 textureIn;
 out vec2 textureOut;
+
 void main(void) {
     gl_Position = vec4(vertexIn, 1.0);
     textureOut = textureIn;
@@ -34,12 +35,10 @@ void main(void) {
 static const char *fragShader = R"(#version 450 core
 in vec2 textureOut;
 out vec4 FragColor;
-
 layout(binding = 0) uniform sampler2D tex_y;
 layout(binding = 1) uniform sampler2D tex_u;
 layout(binding = 2) uniform sampler2D tex_v;
 
-// Column-major definition for GLSL
 const mat3 yuv2rgb = mat3(
     1.164,  1.164,  1.164,
     0.0,   -0.213,  2.112,
@@ -48,7 +47,6 @@ const mat3 yuv2rgb = mat3(
 
 const vec3 yuvOffset = vec3(0.0625, 0.5, 0.5);
 const vec3 rgbOffset = vec3(0.9729, -0.30148, 1.1334);
-
 void main(void) {
     vec3 yuv;
     yuv.x = texture(tex_y, textureOut).r;
@@ -64,7 +62,6 @@ QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
     format.setVersion(4, 5);
     format.setProfile(QSurfaceFormat::CoreProfile);
     format.setSwapInterval(0);
-    
     format.setRedBufferSize(8);
     format.setGreenBufferSize(8);
     format.setBlueBufferSize(8);
@@ -190,13 +187,10 @@ void QYuvOpenGLWidget::initializeGL() {
     glCreateVertexArrays(1, &m_vao);
     glCreateBuffers(1, &m_vbo);
     glNamedBufferStorage(m_vbo, sizeof(coordinate), coordinate, 0);
-
     glVertexArrayVertexBuffer(m_vao, 0, m_vbo, 0, 5 * sizeof(float));
-
     glEnableVertexArrayAttrib(m_vao, 0);
     glVertexArrayAttribFormat(m_vao, 0, 3, GL_FLOAT, GL_FALSE, 0);
     glVertexArrayAttribBinding(m_vao, 0, 0);
-
     glEnableVertexArrayAttrib(m_vao, 1);
     glVertexArrayAttribFormat(m_vao, 1, 2, GL_FLOAT, GL_FALSE, 3 * sizeof(float));
     glVertexArrayAttribBinding(m_vao, 1, 0);
@@ -232,10 +226,8 @@ void QYuvOpenGLWidget::initTextures(int width, int height) {
         
         glTextureParameteri(m_textures[i], GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTextureParameteri(m_textures[i], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        
         glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        
         glTextureStorage2D(m_textures[i], 1, GL_R8, widths[i], heights[i]);
     }
 }
@@ -313,17 +305,13 @@ void QYuvOpenGLWidget::paintGL() {
     // DSA Texture Update
     for (int i = 0; i < 3; i++) {
         glBindTextureUnit(i, m_textures[i]);
-        
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbos[drawIndex][i]);
-        
         glPixelStorei(GL_UNPACK_ROW_LENGTH, m_pboStrides[i] / 1);
-        
         glTextureSubImage2D(m_textures[i], 0, 0, 0, widths[i], heights[i], GL_RED, GL_UNSIGNED_BYTE, nullptr);
     }
 
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
     glBindVertexArray(0);
