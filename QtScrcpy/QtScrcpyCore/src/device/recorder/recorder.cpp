@@ -7,32 +7,28 @@
 
 static const AVRational SCRCPY_TIME_BASE = { 1, 1000000 }; // timestamps in us
 
-Recorder::Recorder(const QString &fileName, QObject *parent) : QThread(parent), m_fileName(fileName), m_format(guessRecordFormat(fileName)) {}
+Recorder::Recorder(const QString &fileName, QObject *parent) 
+    : QThread(parent), m_fileName(fileName), m_format(guessRecordFormat(fileName)) 
+{}
 
-Recorder::~Recorder() {}
-
-AVPacket *Recorder::packetNew(const AVPacket *packet)
+Recorder::~Recorder() 
 {
-    AVPacket *rec = av_packet_alloc();
-    if (!rec) {
-        return Q_NULLPTR;
-    }
-
-    if (av_packet_ref(rec, packet)) {
-        delete rec;
-        return Q_NULLPTR;
-    }
-    return rec;
+    stopRecorder();
+    wait();
+    queueClear();
 }
 
 void Recorder::packetDelete(AVPacket *packet)
 {
-    av_packet_unref(packet);
-    av_packet_free(&packet);
+    if (packet) {
+        av_packet_unref(packet);
+        av_packet_free(&packet);
+    }
 }
 
 void Recorder::queueClear()
 {
+    QMutexLocker locker(&m_mutex);
     while (!m_queue.isEmpty()) {
         packetDelete(m_queue.dequeue());
     }
@@ -240,74 +236,89 @@ Recorder::RecorderFormat Recorder::guessRecordFormat(const QString &fileName)
     return Recorder::RECORDER_FORMAT_NULL;
 }
 
+bool Recorder::push(AVPacket *packet)
+{
+    QMutexLocker locker(&m_mutex);
+    
+    if (m_stopped || m_failed) {
+        return false;
+    }
+
+    m_queue.enqueue(packet);
+    m_recvDataCond.wakeOne();
+    
+    return true;
+}
+
 void Recorder::run()
 {
-    qint64 ptsOrigin = AV_NOPTS_VALUE;
-    for (;;) {
-        AVPacket *rec = Q_NULLPTR;
+    AVPacket *previous = nullptr;
+    int64_t ptsOrigin = AV_NOPTS_VALUE;
+
+    while (!m_stopped) {
+        AVPacket *rec = nullptr;
+        
         {
             QMutexLocker locker(&m_mutex);
             while (!m_stopped && m_queue.isEmpty()) {
                 m_recvDataCond.wait(&m_mutex);
             }
 
-            // if stopped is set, continue to process the remaining events (to
-            // finish the recording) before actually stopping
             if (m_stopped && m_queue.isEmpty()) {
-                AVPacket *last = m_previous;
-                if (last) {
-                    last->pts -= ptsOrigin;
-                    last->dts = last->pts;
-                    // assign an arbitrary duration to the last packet
-                    last->duration = 100000;
-                    bool ok = write(last);
-                    if (!ok) {
-                        // failing to write the last frame is not very serious, no
-                        // future frame may depend on it, so the resulting file
-                        // will still be valid
-                        qWarning("Could not record last packet");
-                    }
-                    packetDelete(last);
-                }
                 break;
             }
 
-            rec = m_queue.dequeue();
-        }
-
-        // recorder->previous is only written from this thread, no need to lock
-        AVPacket *previous = m_previous;
-        m_previous = rec;
-
-        if (!previous) {
-            // we just received the first packet
-            continue;
-        }
-
-        // config packets have no PTS, we must ignore them
-        if (rec->pts != AV_NOPTS_VALUE && previous->pts != AV_NOPTS_VALUE) {
-            // we now know the duration of the previous packet
-            previous->duration = rec->pts - previous->pts;
-        }
-
-        if (previous->pts != AV_NOPTS_VALUE) {
-            if (ptsOrigin == AV_NOPTS_VALUE) {
-                ptsOrigin = previous->pts;
+            if (!m_queue.isEmpty()) {
+                rec = m_queue.dequeue();
             }
-            previous->pts -= ptsOrigin;
-            previous->dts = previous->pts;
-        }        
-
-        bool ok = write(previous);
-        packetDelete(previous);
-        if (!ok) {
-            qCritical("Could not record packet");
-            QMutexLocker locker(&m_mutex);
-            m_failed = true;
-            // discard pending packets
-            queueClear();
-            break;
         }
+
+        if (!rec) continue;
+        
+        if (previous) {
+            if (previous->pts != AV_NOPTS_VALUE && rec->pts != AV_NOPTS_VALUE) {
+                previous->duration = rec->pts - previous->pts;
+            }
+            
+            bool ok = write(previous);
+            packetDelete(previous);
+            previous = nullptr;
+
+            if (!ok) {
+                qCritical("Recorder: Could not record packet");
+                QMutexLocker locker(&m_mutex);
+                m_failed = true;
+                packetDelete(rec);
+                queueClear();
+                break;
+            }
+        }
+
+        if (rec->pts == AV_NOPTS_VALUE) {
+            if (!write(rec)) {
+                 qCritical("Recorder: Could not record config packet");
+                 packetDelete(rec);
+            } else {
+                 packetDelete(rec); 
+            }
+        } else {
+            if (ptsOrigin == AV_NOPTS_VALUE) {
+                ptsOrigin = rec->pts;
+            }
+            if (rec->pts != AV_NOPTS_VALUE) {
+                rec->pts -= ptsOrigin;
+                rec->dts = rec->pts;
+            }
+            previous = rec;
+        }
+    }
+
+    if (previous && !m_failed) {
+        previous->duration = 100000;
+        write(previous);
+        packetDelete(previous);
+    } else if (previous) {
+        packetDelete(previous);
     }
 
     qDebug("Recorder thread ended");
@@ -324,22 +335,4 @@ void Recorder::stopRecorder()
     QMutexLocker locker(&m_mutex);
     m_stopped = true;
     m_recvDataCond.wakeOne();
-}
-
-bool Recorder::push(const AVPacket *packet)
-{
-    QMutexLocker locker(&m_mutex);
-    Q_ASSERT(!m_stopped);
-
-    if (m_failed) {
-        // reject any new packet (this will stop the stream)
-        return false;
-    }
-
-    AVPacket *rec = packetNew(packet);
-    if (rec) {
-        m_queue.enqueue(rec);
-        m_recvDataCond.wakeOne();
-    }
-    return rec != Q_NULLPTR;
 }
