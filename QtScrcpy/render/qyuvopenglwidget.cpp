@@ -150,27 +150,20 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
     }
 
     if (!targetFrame) {
+        for (int i = 0; i < PBO_COUNT; ++i) {
+            int expected = STATE_READY;
+            if (m_frames[i].state.compare_exchange_strong(expected, STATE_FREE, std::memory_order_acq_rel)) {
+                targetFrame = &m_frames[i];
+                break;
+            }
+        }
+    }
+
+    if (!targetFrame) {
         if (!m_updatePending.test_and_set(std::memory_order_acq_rel)) {
             QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
         }
         return; 
-    }
-
-    const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
-    int heights[3] = { height, (height + 1) / 2, (height + 1) / 2 };
-    
-    for (int i = 0; i < 3; i++) {
-        auto dstPtr = static_cast<uint8_t*>(targetFrame->mappedPtrs[i]);
-        if (dstPtr) {
-            size_t totalBytes = static_cast<size_t>(m_pboStrides[i]) * heights[i];
-            memcpy(dstPtr, srcData[i], totalBytes);
-        }
-    }
-
-    targetFrame->state.store(STATE_READY, std::memory_order_release);
-
-    if (!m_updatePending.test_and_set(std::memory_order_acq_rel)) {
-        QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
     }
 }
 
@@ -179,7 +172,6 @@ void QYuvOpenGLWidget::initializeGL() {
 
     m_isInitialized = true;
 
-    // Optimasi State GL
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glDisable(GL_STENCIL_TEST);
