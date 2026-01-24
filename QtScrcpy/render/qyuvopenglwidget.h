@@ -25,7 +25,7 @@ public:
                       std::span<const uint8_t> dataV, 
                       int linesizeY, int linesizeU, int linesizeV);
     
-    const QSize &frameSize();
+    QSize frameSize() const;
 
 signals:
     void requestUpdateTextures(int width, int height, int strideY, int strideU, int strideV);
@@ -48,7 +48,8 @@ private:
     void checkFences();
 
 private:
-    QSize m_frameSize = { -1, -1 };
+    std::atomic<int> m_frameWidth { -1 };
+    std::atomic<int> m_frameHeight { -1 };
 
     GLuint m_vao = 0;
     GLuint m_vbo = 0;
@@ -72,8 +73,6 @@ private:
     bool m_pboSizeValid = false;
     bool m_isInitialized = false;
 
-    quint64 m_renderGen = 0;
-    
     std::atomic<bool> m_textureSizeMismatch = false;
     std::atomic_flag m_updatePending = ATOMIC_FLAG_INIT;
 

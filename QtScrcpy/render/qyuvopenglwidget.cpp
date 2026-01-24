@@ -19,6 +19,7 @@ constexpr int align32(int width) {
     return alignUp(width, 32);
 }
 
+// State Definitions
 constexpr int STATE_FREE = 0;
 constexpr int STATE_READY = 1;
 constexpr int STATE_PROCESSING = 2;
@@ -62,12 +63,10 @@ void main(void) {
 )";
 
 QYuvOpenGLWidget::QYuvOpenGLWidget(QWidget *parent) : QOpenGLWidget(parent) {
-    // Setup Surface Format
     QSurfaceFormat format;
     format.setVersion(4, 5);
     format.setProfile(QSurfaceFormat::CoreProfile);
     format.setSwapInterval(0);
-    // Buffer size hints
     format.setRedBufferSize(8);
     format.setGreenBufferSize(8);
     format.setBlueBufferSize(8);
@@ -106,13 +105,27 @@ QYuvOpenGLWidget::~QYuvOpenGLWidget() {
 }
 
 QSize QYuvOpenGLWidget::minimumSizeHint() const { return QSize(50, 50); }
-QSize QYuvOpenGLWidget::sizeHint() const { return m_frameSize; }
 
-const QSize &QYuvOpenGLWidget::frameSize() { return m_frameSize; }
+QSize QYuvOpenGLWidget::sizeHint() const { 
+    return QSize(m_frameWidth.load(std::memory_order_relaxed), 
+                 m_frameHeight.load(std::memory_order_relaxed)); 
+}
+
+QSize QYuvOpenGLWidget::frameSize() const { 
+    return QSize(m_frameWidth.load(std::memory_order_relaxed), 
+                 m_frameHeight.load(std::memory_order_relaxed)); 
+}
 
 void QYuvOpenGLWidget::setFrameSize(const QSize &frameSize) {
-    if (m_frameSize != frameSize) {
-        m_frameSize = frameSize;
+    int w = frameSize.width();
+    int h = frameSize.height();
+    
+    if (m_frameWidth.load(std::memory_order_relaxed) != w || 
+        m_frameHeight.load(std::memory_order_relaxed) != h) {
+        
+        m_frameWidth.store(w, std::memory_order_relaxed);
+        m_frameHeight.store(h, std::memory_order_relaxed);
+        
         updateGeometry();
         m_pboSizeValid = false;
     }
@@ -124,7 +137,10 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
                                    std::span<const uint8_t> dataV, 
                                    int linesizeY, int linesizeU, int linesizeV)
 {
-    bool sizeChanged = (width != m_frameSize.width() || height != m_frameSize.height());
+    int currentW = m_frameWidth.load(std::memory_order_relaxed);
+    int currentH = m_frameHeight.load(std::memory_order_relaxed);
+
+    bool sizeChanged = (width != currentW || height != currentH);
     bool strideChanged = (linesizeY != m_pboStrides[0] || linesizeU != m_pboStrides[1] || linesizeV != m_pboStrides[2]);
 
     if (sizeChanged || strideChanged || !m_pboSizeValid) [[unlikely]] {
@@ -139,7 +155,7 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
 
     FrameBuffer* targetFrame = nullptr;
     
-    std::lock_guard<std::mutex> lock(m_initLock); 
+    std::scoped_lock lock(m_initLock); 
     if (!m_pboSizeValid) return;
 
     for (int i = 0; i < PBO_COUNT; ++i) {
@@ -164,6 +180,23 @@ void QYuvOpenGLWidget::setFrameData(int width, int height,
             QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
         }
         return; 
+    }
+
+    const uint8_t* srcData[3] = { dataY.data(), dataU.data(), dataV.data() };
+    int heights[3] = { height, (height + 1) / 2, (height + 1) / 2 };
+    
+    for (int i = 0; i < 3; i++) {
+        auto dstPtr = static_cast<uint8_t*>(targetFrame->mappedPtrs[i]);
+        if (dstPtr) {
+            size_t totalBytes = static_cast<size_t>(m_pboStrides[i]) * heights[i];
+            memcpy(dstPtr, srcData[i], totalBytes);
+        }
+    }
+
+    targetFrame->state.store(STATE_READY, std::memory_order_release);
+
+    if (!m_updatePending.test_and_set(std::memory_order_acq_rel)) {
+        QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
     }
 }
 
@@ -192,7 +225,6 @@ void QYuvOpenGLWidget::initializeGL() {
     glCreateBuffers(1, &m_vbo);
     glNamedBufferStorage(m_vbo, sizeof(coordinate), coordinate, 0);
     
-    // Binding VAO
     glVertexArrayVertexBuffer(m_vao, 0, m_vbo, 0, 5 * sizeof(float));
     glEnableVertexArrayAttrib(m_vao, 0);
     glVertexArrayAttribFormat(m_vao, 0, 3, GL_FLOAT, GL_FALSE, 0);
@@ -233,14 +265,13 @@ void QYuvOpenGLWidget::initTextures(int width, int height) {
         glTextureParameteri(m_textures[i], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTextureParameteri(m_textures[i], GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        
         glTextureStorage2D(m_textures[i], 1, GL_R8, widths[i], heights[i]);
     }
 }
 
 void QYuvOpenGLWidget::initPBOs(int height, int strideY, int strideU, int strideV) {
-    std::lock_guard<std::mutex> lock(m_initLock);
-    deInitPBOs(); // Bersihkan yang lama
+    std::scoped_lock lock(m_initLock);
+    deInitPBOs();
 
     m_pboStrides[0] = strideY;
     m_pboStrides[1] = strideU;
@@ -306,7 +337,6 @@ void QYuvOpenGLWidget::checkFences() {
                 if (result == GL_ALREADY_SIGNALED || result == GL_CONDITION_SATISFIED) {
                     glDeleteSync(m_frames[i].fence);
                     m_frames[i].fence = 0;
-                    
                     m_frames[i].state.store(STATE_FREE, std::memory_order_release);
                 }
             }
@@ -332,16 +362,17 @@ void QYuvOpenGLWidget::paintGL() {
 
     if (drawIndex != -1) {
         FrameBuffer& fb = m_frames[drawIndex];
+        
+        int w = m_frameWidth.load(std::memory_order_relaxed);
+        int h = m_frameHeight.load(std::memory_order_relaxed);
 
-        // Bind Textures & PBOs
         for (int i = 0; i < 3; i++) {
             glBindTextureUnit(i, m_textures[i]);
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, fb.pboIds[i]);
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, m_pboStrides[i]); 
-            
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, m_pboStrides[i]);
             glTextureSubImage2D(m_textures[i], 0, 0, 0, 
-                                m_frameSize.width() / (i>0?2:1), 
-                                m_frameSize.height() / (i>0?2:1), 
+                                w / (i>0?2:1), 
+                                h / (i>0?2:1), 
                                 GL_RED, GL_UNSIGNED_BYTE, nullptr);
         }
         
