@@ -8,7 +8,7 @@ DeviceMsg::DeviceMsg(QObject *parent) : QObject(parent) {}
 DeviceMsg::~DeviceMsg()
 {
     if (DMT_GET_CLIPBOARD == m_data.type && Q_NULLPTR != m_data.clipboardMsg.text) {
-        delete m_data.clipboardMsg.text;
+        delete[] m_data.clipboardMsg.text; 
         m_data.clipboardMsg.text = Q_NULLPTR;
     }
 }
