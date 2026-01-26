@@ -226,7 +226,7 @@ void Device::initSignals()
 
                     auto controlSocket = m_server->getControlSocket();
                     int quota = 60;
-                    while (controlSocket->bytesAvailable()) {
+                    while (controlSocket->bytesAvailable() && quota-- > 0) { 
                         QByteArray byteArray = controlSocket->peek(controlSocket->bytesAvailable());
                         DeviceMsg deviceMsg;
                         qint32 consume = deviceMsg.deserialize(byteArray);
