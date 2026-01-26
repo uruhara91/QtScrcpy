@@ -225,6 +225,7 @@ void Device::initSignals()
                     if (!m_controller) return;
 
                     auto controlSocket = m_server->getControlSocket();
+                    int quota = 60;
                     while (controlSocket->bytesAvailable()) {
                         QByteArray byteArray = controlSocket->peek(controlSocket->bytesAvailable());
                         DeviceMsg deviceMsg;

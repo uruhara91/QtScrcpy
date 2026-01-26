@@ -21,6 +21,7 @@ Decoder::Decoder(FrameCallback onFrame, QObject *parent)
     , m_vb(std::make_unique<VideoBuffer>())
     , m_onFrame(std::move(onFrame))
 {
+    moveToThread(this);
     if (m_vb) {
         connect(m_vb.get(), &VideoBuffer::updateFPS, this, &Decoder::updateFPS);
     }
