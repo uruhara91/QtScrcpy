@@ -746,6 +746,19 @@ void InputConvertGame::stopDrag() {
     }
 }
 
+void InputConvertGame::releaseAllKeys() {
+    for (int i = 0; i < MULTI_TOUCH_MAX_NUM; i++) {
+        if (m_multiTouchID[i] != 0) {
+            sendTouchUpEvent(i, QPointF(0.5, 0.5));
+            m_multiTouchID[i] = 0;
+        }
+    }
+    stopSteerWheel();
+    stopDrag();
+    stopMouseMoveTimer();
+    mouseMoveStopTouch();
+}
+
 bool InputConvertGame::switchGameMap()
 {
     m_gameMap = !m_gameMap;
@@ -759,14 +772,7 @@ bool InputConvertGame::switchGameMap()
     hideMouseCursor(m_gameMap);
 
     if (!m_gameMap) {
-        
-        stopMouseMoveTimer();
-        mouseMoveStopTouch();
-
-        stopSteerWheel();
-
-        stopDrag();
-        
+        releaseAllKeys();
     } else {
         m_ctrlMouseMove.lastPos = QPointF(); 
     }
@@ -778,8 +784,18 @@ void InputConvertGame::hideMouseCursor(bool hide)
 {
     if (hide) {
         QGuiApplication::setOverrideCursor(QCursor(Qt::BlankCursor));
+
+        if (m_controller && m_controller->parent()) {
+             QWidget* view = qobject_cast<QWidget*>(m_controller->parent());
+             if (view) view->grabMouse();
+        }
     } else {
         QGuiApplication::restoreOverrideCursor();
+        
+        if (m_controller && m_controller->parent()) {
+             QWidget* view = qobject_cast<QWidget*>(m_controller->parent());
+             if (view) view->releaseMouse();
+        }
     }
 }
 
