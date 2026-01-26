@@ -3,10 +3,12 @@
 #include <QGuiApplication>
 #include <QTimer>
 #include <QTime>
+#include <QWidget>
 #include <QRandomGenerator>
 #include <QElapsedTimer>
 
 #include "inputconvertgame.h"
+#include "../controller.h"
 
 // Tidak lagi digunakan untuk boundary check, tapi kita tetap define
 #define CURSOR_POS_CHECK 50
