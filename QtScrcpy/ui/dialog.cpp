@@ -815,7 +815,7 @@ void Dialog::on_installSndcpyBtn_clicked()
     QString serial = ui->serialBox->currentText().trimmed();
     outLog("Installing soundservice...", true);
     
-    bool success = m_audioOutput.install(serial, 28200);
+    bool success = m_audioOutput.install(serial);
     
     if (success) {
         outLog("soundservice Installed & Configured Successfully!", true);
