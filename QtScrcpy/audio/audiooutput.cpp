@@ -1,9 +1,8 @@
 #include "audiooutput.h"
 #include <QCoreApplication>
 #include <QDebug>
-#include <QAudioFormat>
-#include <QThread>
-#include <QFileInfo>
+#include <QDir>
+#include <QStandardPaths>
 
 #if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
 #include <QAudioSink>
@@ -14,60 +13,68 @@
 #include <QAudioDeviceInfo>
 #endif
 
-// --- KONFIGURASI APLIKASI ANDROID ---
+// Konfigurasi sesuai Audio-Forwarder (Kotlin)
 static const QString APP_PACKAGE = "com.android.sound.helper";
 static const QString APP_ACTIVITY = ".MainActivity";
 static const QString APK_NAME = "soundservice.apk";
+// Sample Rate HARUS sama dengan di Kotlin (48000)
+static const int SAMPLE_RATE = 48000; 
 
-// ================= WORKER IMPLEMENTATION (Server Thread) =================
+// ================= WORKER IMPLEMENTATION =================
 
 AudioServerWorker::AudioServerWorker(int port, QObject *parent)
-: QObject(parent), m_port(port) {}
+    : QObject(parent), m_port(port) {}
 
 AudioServerWorker::~AudioServerWorker() {
     stopServer();
 }
 
 void AudioServerWorker::startServer() {
+    // Hindari double start
     if (m_server && m_server->isListening()) return;
+    
+    // Bersihkan sisa-sisa lama
+    stopServer();
 
     m_server = new QTcpServer(this);
 
-    // Listen di semua interface (AnyIPv4) pada port yang ditentukan
+    // Listen Only on IPv4 Localhost/Remote (Any)
     if (!m_server->listen(QHostAddress::AnyIPv4, m_port)) {
         qCritical() << "[Audio] Failed to listen on port" << m_port;
         emit serverReady(false);
         return;
     }
 
-    // Handle koneksi masuk dari HP
     connect(m_server, &QTcpServer::newConnection, this, [this]() {
-        // Ambil koneksi
+        if (!m_server) return;
+        
         QTcpSocket *next = m_server->nextPendingConnection();
-
+        
+        // Hanya izinkan 1 koneksi audio aktif (Single Stream)
         if (m_client) {
-            // Jika ada koneksi lama nyangkut, putus dulu
             m_client->close();
             m_client->deleteLater();
         }
         m_client = next;
 
-        // --- OPTIMIZATION: LOW LATENCY FOR FPS GAMING ---
-        // Matikan Nagle's Algorithm di sisi PC juga untuk ACK yang cepat
+        // === OPTIMASI NETWORK (MATCHING C++ CLIENT) ===
+        // Matikan Nagle Algorithm (Wajib untuk Realtime Audio)
         m_client->setSocketOption(QAbstractSocket::LowDelayOption, 1);
+        // KeepAlive agar tahu jika kabel putus
         m_client->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
-        // Set buffer socket secukupnya, jangan terlalu besar biar realtime
-        m_client->setReadBufferSize(4096 * 4);
-        // ------------------------------------------------
+        // Buffer Read Socket: Jangan terlalu besar (bikin delay), jangan terlalu kecil (bikin stutter)
+        // 16KB cukup untuk menampung ~80ms audio worst case, tapi kita baca secepatnya.
+        m_client->setReadBufferSize(16 * 1024); 
 
         QString peerAddr = m_client->peerAddress().toString();
         qInfo() << "[Audio] Client connected from:" << peerAddr;
         emit clientConnected(peerAddr);
 
-        // Handle data audio masuk (PCM Stream)
+        // === STREAMING LOOP ===
         connect(m_client, &QTcpSocket::readyRead, this, [this]() {
             if (m_client) {
-                // Emit data mentah ke AudioOutput untuk diputar
+                // Langsung kirim raw bytes ke Audio Thread.
+                // QByteArray menggunakan Implicit Sharing (COW), jadi ini efisien.
                 emit dataReceived(m_client->readAll());
             }
         });
@@ -75,10 +82,7 @@ void AudioServerWorker::startServer() {
         connect(m_client, &QTcpSocket::disconnected, this, [this]() {
             qInfo() << "[Audio] Client disconnected";
             emit clientDisconnected();
-            if (m_client) {
-                m_client->deleteLater();
-                m_client = nullptr;
-            }
+            if (m_client) m_client->deleteLater();
         });
     });
 
@@ -90,33 +94,31 @@ void AudioServerWorker::stopServer() {
     if (m_client) {
         m_client->disconnectFromHost();
         m_client->deleteLater();
-        m_client = nullptr;
     }
     if (m_server) {
         m_server->close();
         m_server->deleteLater();
-        m_server = nullptr;
     }
 }
 
-// ================= AUDIO OUTPUT CLASS (Main Controller) =================
+// ================= AUDIO OUTPUT CLASS =================
 
 AudioOutput::AudioOutput(QObject *parent) : QObject(parent) {
-    // Port 0 = Auto (tapi nanti akan di-override logic start)
-    // Di sini kita inisialisasi worker
-    m_serverWorker = new AudioServerWorker(0);
-
-    // Pindahkan worker ke thread terpisah agar tidak laggy (UI freeze)
-    m_serverWorker->moveToThread(&m_workerThread);
-
-    connect(&m_workerThread, &QThread::finished, m_serverWorker, &QObject::deleteLater);
-    connect(this, &AudioOutput::stopRequested, m_serverWorker, &AudioServerWorker::stopServer);
-
-    // Sambungkan data dari Worker (Thread B) ke AudioOutput (Thread A)
-    // Menggunakan QueuedConnection otomatis karena beda thread
-    connect(m_serverWorker, &AudioServerWorker::dataReceived, this, &AudioOutput::onDataReceived);
-
+    // Thread worker di-start SEKALI saja seumur hidup objek ini.
+    // Ini mencegah crash akibat access violation pada thread yang sudah mati.
     m_workerThread.start();
+    
+    // Setup Audio Format (Fixed 16-bit PCM Stereo 48kHz)
+    m_format.setSampleRate(SAMPLE_RATE);
+    m_format.setChannelCount(2);
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+    m_format.setSampleSize(16);
+    m_format.setCodec("audio/pcm");
+    m_format.setByteOrder(QAudioFormat::LittleEndian);
+    m_format.setSampleType(QAudioFormat::SignedInt);
+#else
+    m_format.setSampleFormat(QAudioFormat::Int16);
+#endif
 }
 
 AudioOutput::~AudioOutput() {
@@ -126,101 +128,94 @@ AudioOutput::~AudioOutput() {
 }
 
 bool AudioOutput::start(const QString& serial, int port) {
-    // 1. Matikan proses lama jika ada
-    stop();
+    stop(); // Pastikan bersih
 
-    // 2. Restart Worker dengan Port baru
-    // Kita harus set property port di worker secara thread-safe atau create ulang
-    // Untuk simplifikasi, kita asumsikan port fixed sesuai parameter user (default 28200)
-    // Jika perlu dinamis, Worker perlu metode setPort.
-    // Tapi di sini kita hack sedikit: worker sudah created, kita re-init servernya.
-    // (Note: Idealnya worker dibuat ulang kalau port berubah, tapi ini cukup)
+    // --- 1. Init Worker ---
+    // Hapus worker lama jika ada (dijadwalkan delete di thread worker)
+    if (m_serverWorker) m_serverWorker->deleteLater();
 
-    // Matikan server lama di thread worker
-    emit stopRequested();
+    // Buat worker baru
+    AudioServerWorker* worker = new AudioServerWorker(port);
+    worker->moveToThread(&m_workerThread);
+    m_serverWorker = worker;
 
-    // Kita perlu mekanisme untuk set port baru ke worker jika berubah
-    // Tapi karena logic AudioServerWorker di header kamu (sebelumnya) fix di constructor,
-    // kita delete dan buat baru worker-nya agar bersih
-    m_workerThread.quit();
-    m_workerThread.wait();
+    // Wiring Signal/Slot
+    connect(this, &AudioOutput::stopRequested, worker, &AudioServerWorker::stopServer);
+    connect(worker, &AudioServerWorker::dataReceived, this, &AudioOutput::onDataReceived);
+    // Auto-clean worker saat thread mati (safety net)
+    connect(&m_workerThread, &QThread::finished, worker, &QObject::deleteLater);
 
-    m_serverWorker = new AudioServerWorker(port);
-    m_serverWorker->moveToThread(&m_workerThread);
-    connect(&m_workerThread, &QThread::finished, m_serverWorker, &QObject::deleteLater);
-    connect(this, &AudioOutput::stopRequested, m_serverWorker, &AudioServerWorker::stopServer);
-    connect(m_serverWorker, &AudioServerWorker::dataReceived, this, &AudioOutput::onDataReceived);
-    m_workerThread.start();
+    // Trigger Start (Thread-Safe)
+    QMetaObject::invokeMethod(worker, "startServer", Qt::QueuedConnection);
 
-    // Start Server di thread worker
-    QMetaObject::invokeMethod(m_serverWorker, "startServer", Qt::BlockingQueuedConnection);
-
-    // 3. Setup Audio Device (Speaker PC)
+    // --- 2. Setup PC Audio ---
     setupAudioDevice();
 
-    // 4. SETUP KONEKSI & PERMISSION (PENTING!)
-
-    // A. ADB REVERSE
+    // --- 3. Setup Android Connection (ADB) ---
+    // Reverse Forwarding: HP connect ke PC Localhost
     QString portStr = QString::number(port);
-    QString remote = QString("tcp:%1").arg(portStr);
-    QString local = QString("tcp:%1").arg(portStr);
-    runAdbCommand(serial, QStringList() << "reverse" << remote << local);
+    runAdbCommand(serial, {"reverse", "tcp:" + portStr, "tcp:" + portStr});
 
-    // B. GRANT PERMISSION
-    runAdbCommand(serial, QStringList() 
-        << "shell" << "pm" << "grant" << APP_PACKAGE << "android.permission.RECORD_AUDIO");
-
-    // C. BYPASS SCREEN CAST PROMPT
-    runAdbCommand(serial, QStringList() 
-        << "shell" << "appops" << "set" << APP_PACKAGE << "PROJECT_MEDIA" << "allow");
-
-    // D. DISABLE AUTO REVOKE
-    runAdbCommand(serial, QStringList() 
-        << "shell" << "appops" << "set" << APP_PACKAGE << "AUTO_REVOKE_PERMISSIONS_IF_UNUSED" << "ignore");
-
-    // 4. Jalankan Aplikasi
+    // Grant Permissions (Penting untuk Android 13+)
+    // 'record_audio' untuk mic/internal, 'project_media' untuk screen cast bypass
+    runAdbCommand(serial, {"shell", "pm", "grant", APP_PACKAGE, "android.permission.RECORD_AUDIO"});
+    runAdbCommand(serial, {"shell", "appops", "set", APP_PACKAGE, "PROJECT_MEDIA", "allow"}); 
+    
+    // Launch App
     return runAppProcess(serial, port);
 }
 
 void AudioOutput::stop() {
-    emit stopRequested();
+    emit stopRequested(); // Stop Server Socket
 
-    // Bersihkan Audio Device
+    // Clean Audio PC
     cleanupAudioDevice();
 
-    // Kill proses adb app (logcat/shell process jika ada yg running)
+    // Clean Worker
+    if (m_serverWorker) {
+        m_serverWorker->deleteLater();
+        m_serverWorker = nullptr;
+    }
+
+    // Kill Android Process (Opsional, biar hemat baterai HP)
     if (m_appProcess.state() != QProcess::NotRunning) {
         m_appProcess.kill();
-        m_appProcess.waitForFinished();
+        m_appProcess.waitForFinished(500);
     }
 }
 
-bool AudioOutput::install(const QString& serial, int port) {
-    Q_UNUSED(port);
-    // Cari lokasi APK (asumsi ada di folder yang sama dengan executable / sndcpy)
-    QString appPath = qgetenv("QTSCRCPY_ADB_PATH"); // Fallback path logic
-    QString apkPath = QCoreApplication::applicationDirPath() + "/sndcpy/" + APK_NAME;
+bool AudioOutput::install(const QString& serial) {
+    // Logic pencarian APK yang lebih robust
+    QStringList searchPaths = {
+        QCoreApplication::applicationDirPath() + "/sndcpy/" + APK_NAME,
+        QCoreApplication::applicationDirPath() + "/" + APK_NAME,
+        QDir::currentPath() + "/" + APK_NAME
+    };
 
-    QFileInfo info(apkPath);
-    if (!info.exists()) {
-        qWarning() << "[Audio] APK not found at:" << apkPath;
-        // Coba fallback ke current dir
-        apkPath = QCoreApplication::applicationDirPath() + "/" + APK_NAME;
-        if (!QFileInfo::exists(apkPath)) return false;
+    QString apkPath;
+    for (const auto& path : searchPaths) {
+        if (QFileInfo::exists(path)) {
+            apkPath = path;
+            break;
+        }
     }
 
-    qInfo() << "[Audio] Installing audio helper..." << apkPath;
-    return runAdbCommand(serial, QStringList() << "install" << "-r" << "-g" << apkPath);
-    // Flag -g mencoba grant semua permission, tapi kadang gagal di Android modern,
-    // makanya kita tetap butuh 'pm grant' manual di fungsi start().
+    if (apkPath.isEmpty()) {
+        qWarning() << "[Audio] APK not found!";
+        return false;
+    }
+
+    qInfo() << "[Audio] Installing:" << apkPath;
+    // -g: Grant all runtime permissions
+    // -r: Reinstall allowed
+    // -t: Allow test packages
+    return runAdbCommand(serial, {"install", "-r", "-g", "-t", apkPath});
 }
 
 bool AudioOutput::runAdbCommand(const QString& serial, const QStringList& args) {
     QProcess adb;
     QString adbPath = qgetenv("QTSCRCPY_ADB_PATH");
-    if (adbPath.isEmpty()) {
-        adbPath = "adb"; // System path fallback
-    }
+    if (adbPath.isEmpty()) adbPath = "adb";
 
     QStringList params;
     params << "-s" << serial << args;
@@ -228,89 +223,68 @@ bool AudioOutput::runAdbCommand(const QString& serial, const QStringList& args) 
     adb.start(adbPath, params);
     if (!adb.waitForStarted()) return false;
     if (!adb.waitForFinished()) return false;
-
     return (adb.exitCode() == 0);
 }
 
 bool AudioOutput::runAppProcess(const QString& serial, int port) {
-    // Format: adb -s serial shell am start -n pkg/activity --ei PORT 28200
-    // Menggunakan 'am start-foreground-service' (Android 8+) atau 'am start' biasa
-    // Kita pakai 'start' activity biasa karena di MainActivity sudah handle startForegroundService
-
+    // Start Service via Activity (MainActivity menghandle startService)
     QString cmd = QString("am start -n %1/%2 --ei PORT %3")
-    .arg(APP_PACKAGE, APP_ACTIVITY)
-    .arg(port);
+                      .arg(APP_PACKAGE, APP_ACTIVITY)
+                      .arg(port);
 
-    qInfo() << "[Audio] Launching app:" << cmd;
+    qInfo() << "[Audio] Launching:" << cmd;
 
-    // Kita jalankan app process secara non-blocking (fire and forget)
-    // Tapi kita simpan QProcess member agar bisa di-kill saat stop()
     QString adbPath = qgetenv("QTSCRCPY_ADB_PATH");
     if (adbPath.isEmpty()) adbPath = "adb";
 
-    QStringList params;
-    params << "-s" << serial << "shell" << cmd;
-
-    m_appProcess.start(adbPath, params);
+    // Jalankan secara detached/background process
+    m_appProcess.start(adbPath, {"-s", serial, "shell", cmd});
     return m_appProcess.waitForStarted(1000);
 }
 
 void AudioOutput::setupAudioDevice() {
-    QAudioFormat format;
-    format.setSampleRate(48000);
-    format.setChannelCount(2);
+    cleanupAudioDevice(); // Safety
 
-    #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
-    format.setSampleSize(16);
-    format.setCodec("audio/pcm");
-    format.setByteOrder(QAudioFormat::LittleEndian);
-    format.setSampleType(QAudioFormat::SignedInt);
-
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     QAudioDeviceInfo info(QAudioDeviceInfo::defaultOutputDevice());
-    if (!info.isFormatSupported(format)) {
-        qWarning() << "[Audio] Raw format not supported, trying nearest...";
-        format = info.nearestFormat(format);
+    if (!info.isFormatSupported(m_format)) {
+        qWarning() << "[Audio] Raw 48k format not supported, adapting...";
+        m_format = info.nearestFormat(m_format);
     }
-    m_audioOutput = new QAudioOutput(format, this);
-
-    // --- LOW LATENCY BUFFER ---
-    // Buffer audio di PC: 1920 sample * 4 bytes (16bit stereo) = ~7.6KB
-    // Semakin kecil semakin realtime, tapi risiko suara "kresek" kalau CPU sibuk.
-    // 1920 samples @ 48kHz = 40ms latency buffer. Cukup aman buat FPS.
-    m_audioOutput->setBufferSize(1920 * 4);
-
+    m_audioOutput = new QAudioOutput(m_format, this);
+    // Buffer: 48kHz * 2ch * 2bytes * 0.04s (40ms) = ~7.6KB
+    // Buffer terlalu kecil = Underrun (kresek), Terlalu besar = Latency
+    m_audioOutput->setBufferSize(7680); 
     m_audioIO = m_audioOutput->start();
-    #else
-    format.setSampleFormat(QAudioFormat::Int16);
+#else
     QAudioDevice device = QMediaDevices::defaultAudioOutput();
-    m_audioSink = new QAudioSink(device, format, this);
-
-    // Sama, buffer kecil untuk latency rendah
-    m_audioSink->setBufferSize(1920 * 4);
-
+    m_audioSink = new QAudioSink(device, m_format, this);
+    m_audioSink->setBufferSize(7680); // Target ~40ms Latency
     m_audioIO = m_audioSink->start();
-    #endif
+#endif
 }
 
 void AudioOutput::cleanupAudioDevice() {
-    #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     if (m_audioOutput) {
         m_audioOutput->stop();
         delete m_audioOutput;
         m_audioOutput = nullptr;
     }
-    #else
+#else
     if (m_audioSink) {
-        m_audioSink->stop();
+        m_audioSink->stop(); // Stop engine sebelum delete! Penting untuk mencegah SEGV
         delete m_audioSink;
         m_audioSink = nullptr;
     }
-    #endif
+#endif
     m_audioIO = nullptr;
 }
 
 void AudioOutput::onDataReceived(const QByteArray &data) {
     if (m_audioIO) {
+        // Tulis data ke Sound Card
+        // QAudioSink akan memblokir jika buffer penuh, menjaga sinkronisasi
         m_audioIO->write(data);
     }
 }

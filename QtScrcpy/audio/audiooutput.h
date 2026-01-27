@@ -7,15 +7,17 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QPointer>
+#include <QAudioFormat>
 
 #if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
 class QAudioSink;
+class QMediaDevices;
 #else
 class QAudioOutput;
 #endif
 class QIODevice;
 
-// Worker class
+// --- Worker Class (Berjalan di Thread Terpisah) ---
 class AudioServerWorker : public QObject {
     Q_OBJECT
 public:
@@ -27,6 +29,7 @@ public slots:
     void stopServer();
 
 signals:
+    // Menggunakan const reference untuk menghindari copy berlebih
     void dataReceived(const QByteArray &data);
     void serverReady(bool success);
     void clientConnected(const QString &addr);
@@ -34,10 +37,12 @@ signals:
 
 private:
     int m_port;
-    QTcpServer *m_server = nullptr;
-    QTcpSocket *m_client = nullptr;
+    // QPointer mencegah Dangling Pointer jika objek dihapus di tempat lain
+    QPointer<QTcpServer> m_server;
+    QPointer<QTcpSocket> m_client;
 };
 
+// --- Main Controller (Berjalan di Main/UI Thread) ---
 class AudioOutput : public QObject
 {
     Q_OBJECT
@@ -46,17 +51,14 @@ public:
     ~AudioOutput();
 
     bool start(const QString& serial, int port);
-    bool install(const QString& serial, int port);
+    bool install(const QString& serial);
     void stop();
 
 signals:
     void stopRequested();
 
 private:
-    // Helper
     bool runAdbCommand(const QString& serial, const QStringList& args);
-    
-    // Internal process logic
     bool runAppProcess(const QString& serial, int port);
     void setupAudioDevice();
     void cleanupAudioDevice();
@@ -65,9 +67,10 @@ private slots:
     void onDataReceived(const QByteArray &data);
 
 private:
+    // Thread Worker tetap hidup selama aplikasi berjalan (Persistent Thread)
     QThread m_workerThread;
-    AudioServerWorker *m_serverWorker = nullptr;
-    QProcess m_appProcess; 
+    QPointer<AudioServerWorker> m_serverWorker;
+    QProcess m_appProcess;
     
     // Audio Components
     QPointer<QIODevice> m_audioIO;
@@ -77,8 +80,7 @@ private:
     QAudioSink *m_audioSink = nullptr;
 #endif
     
-    bool m_running = false;
-    QString m_currentSerial;
+    QAudioFormat m_format;
 };
 
 #endif // AUDIOOUTPUT_H
